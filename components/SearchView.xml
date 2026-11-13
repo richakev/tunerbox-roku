@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<component name="SearchView" extends="Group">
+  <script type="text/brightscript" uri="pkg:/components/SearchView.brs" />
+  <script type="text/brightscript" uri="pkg:/source/utils.brs" />
+  <interface>
+    <!-- inputs from the scene: { query, items: [ {k:"ch"|"pg", idx, num, name, title, start, stop} ] } -->
+    <field id="results" type="assocarray" onChange="onResults" />
+    <!-- outputs to the scene -->
+    <field id="query" type="string" alwaysNotify="true" />
+    <field id="request" type="assocarray" alwaysNotify="true" />
+    <function name="openSearch" />
+    <function name="closeSearch" />
+  </interface>
+  <children>
+    <Rectangle translation="[-200,-200]" width="2320" height="1480" color="0x00000099" />
+    <Rectangle translation="[30,24]" width="1860" height="1032" color="0x0B2A6AF6" />
+    <Rectangle translation="[30,24]" width="1860" height="3" color="0x4F86E8FF" />
+    <Rectangle translation="[30,1053]" width="1860" height="3" color="0x4F86E8FF" />
+    <Rectangle translation="[30,24]" width="3" height="1032" color="0x4F86E8FF" />
+    <Rectangle translation="[1887,24]" width="3" height="1032" color="0x4F86E8FF" />
+    <Label id="titleLbl" translation="[60,32]" width="300" height="62" vertAlign="center" text="Search" color="0xFFFFFFFF" font="font:LargeBoldSystemFont" />
+    <Label id="countLbl" translation="[260,32]" width="600" height="62" vertAlign="center" color="0xAFC8F5FF" font="font:SmallSystemFont" />
+    <Rectangle id="boxBorder" translation="[60,106]" width="1800" height="84" color="0xFFC845FF" />
+    <Rectangle translation="[64,110]" width="1792" height="76" color="0x07102EFF" />
+    <Label id="queryLbl" translation="[90,110]" width="1740" height="76" vertAlign="center" color="0xFFFFFFFF" font="font:MediumBoldSystemFont" />
+    <Group id="keysGroup" />
+    <Group id="rowsGroup" />
+    <Label id="msgLbl" translation="[700,240]" width="1140" height="80" horizAlign="center" vertAlign="center" wrap="true" color="0xDCE8FFFF" font="font:MediumSystemFont" />
+    <Label id="footLbl" translation="[60,1004]" width="1780" height="40" vertAlign="center" color="0xC5D3EFFF" font="font:SmallSystemFont" />
+    <Timer id="debounce" duration="0.35" repeat="false" />
+  </children>
+</component>

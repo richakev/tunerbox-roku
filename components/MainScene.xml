@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<component name="MainScene" extends="Scene">
+  <script type="text/brightscript" uri="pkg:/components/MainScene.brs" />
+  <script type="text/brightscript" uri="pkg:/source/utils.brs" />
+  <interface>
+    <field id="launchHost" type="string" alwaysNotify="true" onChange="onLaunchHost" />
+    <field id="exitApp" type="boolean" alwaysNotify="true" />
+    <!-- { contentId: channel number, mediaType } from launch args or roInput -->
+    <field id="deepLink" type="assocarray" alwaysNotify="true" onChange="onDeepLink" />
+  </interface>
+  <children>
+    <Rectangle id="bg" width="1920" height="1080" color="0x000000FF" />
+    <Video id="video" translation="[0,0]" width="1920" height="1080" enableUI="false" enableTrickPlay="false" />
+    <GuideView id="guide" visible="false" />
+    <PlayerHud id="hud" visible="false" />
+    <SportsView id="sports" visible="false" />
+    <SearchView id="search" visible="false" />
+    <OnDemandView id="od" visible="false" />
+    <MenuView id="menu" visible="false" />
+
+    <Group id="statusGroup" visible="true">
+      <!-- oversized so it still covers the whole screen when scaled into the safe area -->
+      <Rectangle translation="[-200,-200]" width="2320" height="1480" color="0x0B1D46FF" />
+      <Label id="statusTitle" translation="[0,300]" width="1920" height="90" horizAlign="center" vertAlign="center" text="TunerBox TV" color="0xFFC845FF" font="font:LargeBoldSystemFont" />
+      <Label id="statusLbl" translation="[260,420]" width="1400" height="300" horizAlign="center" vertAlign="top" wrap="true" color="0xFFFFFFFF" font="font:MediumSystemFont" />
+    </Group>
+
+    <Group id="toast" visible="false">
+      <Rectangle id="toastBg" color="0x000000D0" />
+      <Label id="toastLbl" color="0xFFFFFFFF" font="font:MediumBoldSystemFont" />
+    </Group>
+
+    <!-- screen-fit calibration overlay: NOT scaled, drawn in raw screen pixels -->
+    <Group id="fitCal" visible="false">
+      <Rectangle id="calTop" color="0xFFC845FF" />
+      <Rectangle id="calBottom" color="0xFFC845FF" />
+      <Rectangle id="calLeft" color="0xFFC845FF" />
+      <Rectangle id="calRight" color="0xFFC845FF" />
+      <Rectangle translation="[460,400]" width="1000" height="280" color="0x0B1D46EE" />
+      <Label id="calTitle" translation="[460,420]" width="1000" height="70" horizAlign="center" vertAlign="center" text="Screen fit" color="0xFFC845FF" font="font:LargeBoldSystemFont" />
+      <Label id="calValue" translation="[460,490]" width="1000" height="60" horizAlign="center" vertAlign="center" color="0xFFFFFFFF" font="font:LargeBoldSystemFont" />
+      <Label id="calHelp" translation="[500,550]" width="920" height="120" horizAlign="center" vertAlign="center" wrap="true" color="0xC5D3EFFF" font="font:SmallSystemFont" text="Adjust until all four yellow edges are just visible.&#10;Left/Right or Up/Down  Adjust      OK / Back  Done" />
+    </Group>
+
+    <Timer id="toastTimer" duration="3" repeat="false" />
+    <Timer id="retryTimer" duration="2" repeat="false" />
+    <Timer id="entryTimer" duration="1.8" repeat="false" />
+    <Timer id="guideDelay" duration="8" repeat="false" />
+    <Timer id="checkTimer" duration="1.5" repeat="true" />
+    <!-- On Demand playback: clock / progress saves, skip debounce, long-pause release -->
+    <Timer id="vodTimer" duration="1" repeat="true" />
+    <Timer id="seekTimer" duration="0.6" repeat="false" />
+    <Timer id="parkTimer" duration="60" repeat="false" />
+  </children>
+</component>

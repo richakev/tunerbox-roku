@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<component name="MenuView" extends="Group">
+  <script type="text/brightscript" uri="pkg:/components/MenuView.brs" />
+  <script type="text/brightscript" uri="pkg:/source/utils.brs" />
+  <interface>
+    <field id="items" type="array" onChange="onItems" />
+    <field id="subtitle" type="string" onChange="onItems" />
+    <field id="heading" type="string" value="Menu" onChange="onItems" />
+    <field id="selected" type="string" alwaysNotify="true" />
+    <field id="closeRequest" type="boolean" alwaysNotify="true" />
+    <function name="openMenu" />
+    <function name="closeMenu" />
+  </interface>
+  <children>
+    <Rectangle translation="[-200,-200]" width="2320" height="1480" color="0x000000A8" />
+    <Group id="panel" />
+  </children>
+</component>

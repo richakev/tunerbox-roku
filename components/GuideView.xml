@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<component name="GuideView" extends="Group">
+  <script type="text/brightscript" uri="pkg:/components/GuideView.brs" />
+  <script type="text/brightscript" uri="pkg:/source/utils.brs" />
+  <interface>
+    <field id="channels" type="array" onChange="onChannels" />
+    <field id="guideData" type="assocarray" onChange="onGuideData" />
+    <field id="favs" type="assocarray" alwaysNotify="true" onChange="onFavs" />
+    <field id="focusedChannel" type="integer" value="-1" />
+    <field id="tuneRequest" type="integer" alwaysNotify="true" />
+    <field id="previewRequest" type="integer" alwaysNotify="true" />
+    <field id="optionsRequest" type="assocarray" alwaysNotify="true" />
+    <field id="menuRequest" type="string" alwaysNotify="true" />
+    <field id="exitRequest" type="boolean" alwaysNotify="true" />
+    <!-- overscan insets in screen pixels [left, top, right, bottom]; the guide is laid out
+         inside them at full size (it is not scaled) -->
+    <field id="safe" type="array" onChange="onSafe" />
+    <!-- where the live preview video should go, in screen pixels [x, y, w, h] -->
+    <field id="previewRect" type="array" />
+    <function name="openGuide" />
+    <function name="closeGuide" />
+    <function name="jumpToNumber" />
+  </interface>
+  <children>
+    <!-- background with a "hole" where the live preview video shows through (built in layout()) -->
+    <Group id="bgGroup" />
+
+    <!-- program info -->
+    <Label id="titleLbl" height="66" vertAlign="center" color="0xFFFFFFFF" font="font:LargeBoldSystemFont" />
+    <Group id="badge" visible="false">
+      <Rectangle id="badgeRect" width="80" height="38" color="0x5A6B85FF" />
+      <Label id="badgeLbl" width="80" height="38" horizAlign="center" vertAlign="center" color="0xFFFFFFFF" font="font:SmallBoldSystemFont" />
+    </Group>
+    <Label id="subLbl" height="42" vertAlign="center" color="0xE6EEFFFF" font="font:MediumSystemFont" />
+    <Label id="metaLbl" height="40" vertAlign="center" color="0xFFD84AFF" font="font:SmallSystemFont" />
+    <Label id="descLbl" height="170" wrap="true" numLines="4" lineSpacing="4" color="0xF2F6FFFF" font="font:SmallSystemFont" />
+    <Label id="clockLbl" width="418" height="64" horizAlign="right" vertAlign="center" color="0xFFFFFFFF" font="font:LargeBoldSystemFont" />
+    <Label id="dateTopLbl" width="418" height="34" horizAlign="right" vertAlign="center" color="0xAFC8F5FF" font="font:SmallSystemFont" />
+    <Label id="filterLbl" width="398" height="34" horizAlign="right" vertAlign="center" color="0xFFC845FF" font="font:SmallBoldSystemFont" />
+    <Label id="jumpLbl" width="598" height="60" horizAlign="right" vertAlign="center" color="0xFFC845FF" font="font:LargeBoldSystemFont" visible="false" />
+
+    <!-- grid header -->
+    <Rectangle id="hdrBar" height="50" color="0x1B4FA8FF" />
+    <Label id="dateLbl" width="380" height="50" vertAlign="center" color="0xFFC845FF" font="font:SmallBoldSystemFont" />
+
+    <Group id="rowsGroup" />
+    <Group id="hintsGroup" />
+
+    <Timer id="previewTimer" duration="0.9" repeat="false" />
+    <Timer id="clockTimer" duration="30" repeat="true" />
+    <Timer id="jumpTimer" duration="1.6" repeat="false" />
+  </children>
+</component>

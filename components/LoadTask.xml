@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<component name="LoadTask" extends="Task">
+  <script type="text/brightscript" uri="pkg:/components/LoadTask.brs" />
+  <script type="text/brightscript" uri="pkg:/source/utils.brs" />
+  <interface>
+    <!-- "search" = GET /api/search; "sports" / "sgroup" / "scheck" / "scheckstate" / "record" = Sports & PPV + DVR; "espn" = ESPN scoreboards matched to the guide; "favs" = GET favorites, "setfav" = POST favorite; "boot" = channel list (cache -> sidecar -> M3U); "guide" = programme guide (background) -->
+    <field id="mode" type="string" value="boot" />
+    <field id="baseUrl" type="string" />
+    <field id="useCache" type="boolean" value="true" />
+    <field id="hideUnmapped" type="boolean" value="true" />
+    <field id="refreshCache" type="boolean" value="false" />
+    <field id="guideHours" type="integer" value="12" />
+    <!-- guide fallback input: [{ n, id, name, tvgName }] (lower-cased) -->
+    <field id="chanKeys" type="array" />
+    <field id="favNumber" type="string" />
+    <field id="sportsGroup" type="string" />
+    <!-- "espn" = live game schedule for these league ids (comma-separated), matched against the cached guide -->
+    <field id="leagues" type="string" />
+    <field id="searchQuery" type="string" />
+    <field id="recNumber" type="string" />
+    <field id="recStart" type="string" />
+    <!-- "api" = GET apiPath (or POST apiBody when set); apiTag / apiCtx come back in result -->
+    <field id="apiPath" type="string" />
+    <field id="apiBody" type="string" />
+    <field id="apiTag" type="string" />
+    <field id="apiCtx" type="assocarray" />
+    <field id="favOn" type="boolean" value="true" />
+    <field id="status" type="string" />
+    <field id="result" type="assocarray" />
+  </interface>
+</component>
