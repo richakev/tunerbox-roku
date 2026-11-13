@@ -3,6 +3,12 @@
 Live-TV front end for a running TunerBox backend. Loads `/playlist.m3u` + `/epg.xml`
 from `http://<host>:8642`, shows a cable-box style guide and live viewer.
 
+## Versioning
+After each successful commit, the hook increments `minor_version` in `manifest` and builds
+`tunerbox-tv.zip` in the project root. The version bump happens after the commit and is left
+unstaged. Enable the repository hook once:
+`git config core.hooksPath .githooks`
+
 ## Install (sideload)
 1. Roku: Settings > System > Advanced > Developer mode (enable, set a password).
 2. Zip the contents of this folder (manifest at zip root) or use `tunerbox-tv.zip`.

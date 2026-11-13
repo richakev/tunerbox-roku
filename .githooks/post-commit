@@ -1,0 +1,25 @@
+#!/bin/sh
+set -eu
+
+root=$(git rev-parse --show-toplevel)
+manifest="$root/manifest"
+tmp=$(mktemp "$manifest.XXXXXX")
+trap 'rm -f "$tmp"' EXIT HUP INT TERM
+
+awk -F= '
+    BEGIN { OFS = "="; found = 0 }
+    $1 == "minor_version" {
+        if (found || $2 !~ /^[0-9]+$/) exit 1
+        $2 = $2 + 1
+        found = 1
+    }
+    { print }
+    END { if (!found) exit 1 }
+' "$manifest" > "$tmp"
+
+mv "$tmp" "$manifest"
+trap - EXIT HUP INT TERM
+
+rm -f "$root/tunerbox-tv.zip"
+cd "$root"
+zip -qr tunerbox-tv.zip manifest components images source
