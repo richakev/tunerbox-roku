@@ -2,9 +2,8 @@
 set -eu
 
 root=$(git rev-parse --show-toplevel)
-manifest="$root/manifest"
-tmp=$(mktemp "$manifest.XXXXXX")
-trap 'rm -f "$tmp"' EXIT HUP INT TERM
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 
 awk -F= '
     BEGIN { OFS = "="; found = 0 }
@@ -15,11 +14,11 @@ awk -F= '
     }
     { print }
     END { if (!found) exit 1 }
-' "$manifest" > "$tmp"
+' "$root/manifest" > "$tmp/manifest"
 
-mv "$tmp" "$manifest"
-trap - EXIT HUP INT TERM
+for directory in components images source; do
+    cp -R "$root/$directory" "$tmp/$directory"
+done
 
 rm -f "$root/tunerbox-tv.zip"
-cd "$root"
-zip -qr tunerbox-tv.zip manifest components images source
+(cd "$tmp" && zip -qr "$root/tunerbox-tv.zip" manifest components images source)
