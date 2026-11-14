@@ -4,10 +4,29 @@ Live-TV front end for a running TunerBox backend. Loads `/playlist.m3u` + `/epg.
 from `http://<host>:8642`, shows a cable-box style guide and live viewer.
 
 ## Versioning
-After each successful commit, the hook builds `tunerbox-tv.zip` in the project root with
-`minor_version` incremented in the packaged manifest. The repository's `manifest` is unchanged.
+`.githooks/build-zip.sh` bumps `minor_version` in `manifest` and rebuilds `tunerbox-tv.zip` in the
+project root, but only when `components/`, `images/`, `source/` or the rest of the manifest changed since
+the last build (tracked in `.build-stamp`). It runs automatically when Claude Code finishes a turn
+(Stop hook in `.claude/settings.json`) and after each commit (post-commit hook); you can also run it by hand.
 Enable the repository hook once:
 `git config core.hooksPath .githooks`
+
+## Auto-install on your Roku
+After each new build, `.githooks/install-roku.sh` sideloads the zip onto your Roku, so the TV always has
+the latest version. Set it up once (the Roku must be in developer mode, see Install below):
+
+    echo 'ROKU_IP=192.168.1.60' > .roku.env                                         # gitignored
+    security add-generic-password -s tunerbox-roku -a rokudev -w 'DEV-PASSWORD'     # macOS Keychain
+
+`ROKU_IP` and `ROKU_DEV_PASSWORD` environment variables work too. Without them nothing is installed.
+If the Roku is off or unreachable it prints a warning and the build or commit still succeeds.
+Run `.githooks/install-roku.sh` by hand to reinstall the current zip.
+
+## Keeping up with TunerBox
+TunerBox's `tests/test_roku_contract.py` lists every endpoint this app calls and the fields it reads,
+so a backend change that would break the Roku fails TunerBox's tests. If you start calling a new
+endpoint here, add it to that list. Features the web TV UI has and this app doesn't yet are tracked in
+TunerBox's `ideas/IMPROVEMENT-IDEAS.md` under "Roku app".
 
 ## Install (sideload)
 1. Roku: Settings > System > Advanced > Developer mode (enable, set a password).

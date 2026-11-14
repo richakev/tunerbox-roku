@@ -145,7 +145,9 @@ sub mergeLists()
     gNow = []
     gNowMissing = []
     up = []
-    showMissing = true
+    ' games no channel carries: off when either TunerBox's "List games you have no channel for"
+    ' or the Roku's MENU > "Show games not in guide" is off
+    showMissing = not isFalse(m.data.show_unmatched)
     if m.games <> invalid then
         if isFalse(m.games.showUnmatched) then showMissing = false
         if m.games.games <> invalid then
@@ -260,15 +262,19 @@ function strv(v as Dynamic) as String
     if v = invalid then return ""
     t = Type(v)
     if t = "String" or t = "roString" then return v
-    if t = "Integer" or t = "roInt" or t = "Float" or t = "roFloat" or t = "Double" or t = "LongInteger" then return Str(v).Trim()
+    if t = "Integer" or t = "roInt" or t = "roInteger" or t = "LongInteger" or t = "roLongInteger" then return v.ToStr()
+    if t = "Float" or t = "roFloat" or t = "Double" or t = "roDouble" then return Str(v).Trim()
     return ""
 end function
 
+' Numbers from ParseJson can arrive boxed (roInteger, roLongInteger...) after crossing a node field,
+' so every numeric type name is accepted; an unknown type used to come back as 0 (= Wed 7:00 PM).
 function intv(v as Dynamic) as Integer
     if v = invalid then return 0
     t = Type(v)
-    if t = "Integer" or t = "roInt" then return v
-    if t = "Float" or t = "roFloat" or t = "Double" or t = "LongInteger" then return Int(v)
+    if t = "Integer" or t = "roInt" or t = "roInteger" or t = "LongInteger" or t = "roLongInteger" then return v
+    if t = "Float" or t = "roFloat" or t = "Double" or t = "roDouble" then return Int(v)
+    if t = "String" or t = "roString" then return v.Trim().ToInt()
     return 0
 end function
 

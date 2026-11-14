@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.githooks/build-zip.sh >&2",
+            "timeout": 180,
+            "statusMessage": "Building tunerbox-tv.zip and installing it on the Roku..."
+          }
+        ]
+      }
+    ]
+  }
+}

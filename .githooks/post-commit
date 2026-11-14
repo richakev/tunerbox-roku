@@ -1,24 +1,5 @@
 #!/bin/sh
+# Rebuild tunerbox-tv.zip (and bump minor_version) if the app changed since the last build.
 set -eu
-
 root=$(git rev-parse --show-toplevel)
-tmp=$(mktemp -d)
-trap 'rm -rf "$tmp"' EXIT HUP INT TERM
-
-awk -F= '
-    BEGIN { OFS = "="; found = 0 }
-    $1 == "minor_version" {
-        if (found || $2 !~ /^[0-9]+$/) exit 1
-        $2 = $2 + 1
-        found = 1
-    }
-    { print }
-    END { if (!found) exit 1 }
-' "$root/manifest" > "$tmp/manifest"
-
-for directory in components images source; do
-    cp -R "$root/$directory" "$tmp/$directory"
-done
-
-rm -f "$root/tunerbox-tv.zip"
-(cd "$tmp" && zip -qr "$root/tunerbox-tv.zip" manifest components images source)
+"$root/.githooks/build-zip.sh"

@@ -141,6 +141,12 @@ sub loadSports()
     result = { ok: false, data: invalid }
     d = getObj("/api/sports", 30000)
     if d <> invalid and d.on_now <> invalid and d.upcoming <> invalid and d.channels <> invalid and d.groups <> invalid then
+        ' TunerBox Settings > Sports > "List games you have no channel for" (absent = on)
+        st = getObj("/api/settings", 8000)
+        if Type(st) = "roAssociativeArray" then
+            v = st.sports_show_unmatched
+            if (Type(v) = "Boolean" or Type(v) = "roBoolean") and v = false then d.show_unmatched = false
+        end if
         result.data = d
         result.ok = true
     end if
