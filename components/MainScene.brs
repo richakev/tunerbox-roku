@@ -119,8 +119,13 @@ end sub
 sub start()
     if regRead("host", "") = "" then
         m.mode = "needhost"
-        launchComplete()
         setStatus("No TunerBox server set." + Chr(10) + Chr(10) + "Press OK to enter its IP address.")
+        ' a dialog before the app's first screen: tell the OS (certification 3.2), so the time spent typing
+        ' doesn't count as launch time; AppLaunchComplete follows when it closes (launchDialogDone)
+        if not m.launchDone then
+            m.launchDlg = true
+            m.top.signalBeacon("AppDialogInitiate")
+        end if
         promptHost()
     else
         loadAll()
@@ -265,6 +270,15 @@ end sub
 
 ' ------------------------------------------------------------ launch beacon / deep links
 ' Tell the OS the app is ready for interaction (certification 3.2). Sent once.
+' the first-launch server prompt closed (entered or dismissed)
+sub launchDialogDone()
+    if m.launchDlg = invalid or not m.launchDlg then return
+    m.launchDlg = false
+    m.top.signalBeacon("AppDialogComplete")
+    ' nothing entered: the "No TunerBox server set" screen is the first screen
+    if m.mode = "needhost" then launchComplete()
+end sub
+
 sub launchComplete()
     if m.launchDone then return
     m.launchDone = true
@@ -1549,6 +1563,7 @@ sub onDlgClosed(event as Object)
     d = event.getRoSGNode()
     if m.dlg <> invalid and m.dlg.isSameNode(d) then
         m.dlg = invalid
+        launchDialogDone()
         restoreFocus()
         if m.mode = "needhost" or m.mode = "error" then m.top.setFocus(true)
     end if
