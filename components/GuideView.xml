@@ -43,11 +43,13 @@
     <Label id="filterLbl" width="398" height="34" horizAlign="right" vertAlign="center" color="0xFFC845FF" font="font:SmallBoldSystemFont" />
     <Label id="jumpLbl" width="598" height="60" horizAlign="right" vertAlign="center" color="0xFFC845FF" font="font:LargeBoldSystemFont" visible="false" />
 
+    <!-- filter pills (as the web guide): Favorites, then All / Movies / Sports / News / Kids; Up from the
+         first channel moves the highlight onto them -->
+    <Group id="pillsGroup" />
+
     <!-- grid header -->
     <Rectangle id="hdrBar" height="50" color="0x1B4FA8FF" />
-    <!-- the category picker (Up from the first channel) highlights the header's channel column -->
-    <Rectangle id="pickRect" height="50" color="0xFFC845FF" visible="false" />
-    <Label id="dateLbl" width="380" height="50" vertAlign="center" color="0xFFC845FF" font="font:SmallBoldSystemFont" />
+    <Label id="dateLbl" width="380" height="50" vertAlign="center" color="0xFFFFFFFF" font="font:SmallBoldSystemFont" />
 
     <Group id="rowsGroup" />
     <Group id="hintsGroup" />

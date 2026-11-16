@@ -1,7 +1,8 @@
-' Sports & PPV panel (mirrors the TunerBox web screen): tabs On Now / Coming Up / Sports Channels / Events & PPV.
+' Sports & Events panel (mirrors the TunerBox web screen): tabs On Now / Coming Up / Sports Channels / Events.
 ' Data comes from TunerBox GET /api/sports; the scene does the networking and playback.
 
 sub init()
+    themeInit()
     m.ROW_X = 44
     m.ROW_Y = 196
     m.ROW_H = 80
@@ -18,7 +19,7 @@ sub init()
     m.msgLbl.font.size = 36
     m.footLbl.font.size = 27
 
-    m.tabs = ["On Now", "Coming Up", "Sports Channels", "Events & PPV"]
+    m.tabs = ["On Now", "Coming Up", "Sports Channels", "Events"]
     m.tab = 0
     m.sel = 0
     m.top0 = 0
@@ -36,17 +37,17 @@ end sub
 
 ' The tab strip and the visible rows are created once and then only updated, never rebuilt.
 sub buildNodes()
-    m.tabSel = mkRect(60, 100, 10, 50, "0xFFC845FF")
+    m.tabSel = mkRect(60, 100, 10, 50, thm("0xFFC845FF"))
     m.tabsGroup.appendChild(m.tabSel)
     m.tabLbls = []
     for i = 0 to 3
-        l = centerLabel(60, 100, 10, 50, "", "0xCFE0FFFF")
+        l = centerLabel(60, 100, 10, 50, "", thm("0xCFE0FFFF"))
         m.tabsGroup.appendChild(l)
         m.tabLbls.Push(l)
     end for
 
     ' unseen label used only to measure how wide a title is
-    m.measLbl = mkLabel(0, 0, 0, m.ROW_H - 4, "", 33, true, "0xFFFFFFFF")
+    m.measLbl = mkLabel(0, 0, 0, m.ROW_H - 4, "", 33, true, thm("0xFFFFFFFF"))
     m.measLbl.opacity = 0
     m.rowsGroup.appendChild(m.measLbl)
 
@@ -56,13 +57,13 @@ sub buildNodes()
     for r = 0 to m.NROWS - 1
         y = m.ROW_Y + r * m.ROW_H
         row = { y: y }
-        row.bg = mkRect(m.ROW_X, y, 1800, h, "0x1C4FA855")
-        row.badgeBg = mkRect(tx, y + 14, 104, h - 28, "0x3B5B96FF")
-        row.badge = mkLabel(tx, y + 14, 104, h - 28, "", 24, true, "0xFFFFFFFF")
+        row.bg = mkRect(m.ROW_X, y, 1800, h, thm("0x1C4FA855"))
+        row.badgeBg = mkRect(tx, y + 14, 104, h - 28, thm("0x3B5B96FF"))
+        row.badge = mkLabel(tx, y + 14, 104, h - 28, "", 24, true, thm("0xFFFFFFFF"))
         row.badge.horizAlign = "center"
-        row.title = mkLabel(tx, y, 0, h, "", 33, true, "0xFFFFFFFF")
-        row.subt = mkLabel(tx, y, 100, h, "", 27, false, "0xA9BEE8FF")
-        row.right = mkLabel(1160, y, 660, h, "", 27, false, "0xCFE0FFFF")
+        row.title = mkLabel(tx, y, 0, h, "", 33, true, thm("0xFFFFFFFF"))
+        row.subt = mkLabel(tx, y, 100, h, "", 27, false, thm("0xA9BEE8FF"))
+        row.right = mkLabel(1160, y, 660, h, "", 27, false, thm("0xCFE0FFFF"))
         row.right.horizAlign = "right"
         for each k in ["bg", "badgeBg", "badge", "title", "subt", "right"]
             row[k].visible = false
@@ -84,7 +85,7 @@ sub openSports()
     m.tab = 0
     m.sel = 0
     m.top0 = 0
-    m.top.message = "Loading Sports & PPV..."
+    m.top.message = "Loading Sports & Events..."
     m.top.visible = true
     m.top.setFocus(true)
     render()
@@ -263,8 +264,7 @@ function strv(v as Dynamic) as String
     t = Type(v)
     if t = "String" or t = "roString" then return v
     if t = "Integer" or t = "roInt" or t = "roInteger" or t = "LongInteger" or t = "roLongInteger" then return v.ToStr()
-    if t = "Float" or t = "roFloat" or t = "Double" or t = "roDouble" then return Str(v).Trim()
-    return ""
+    return anyStr(v)     ' keeps every digit of a whole Float / Double
 end function
 
 ' Numbers from ParseJson can arrive boxed (roInteger, roLongInteger...) after crossing a node field,
@@ -510,9 +510,9 @@ sub drawTabs()
         if i = m.tab then
             m.tabSel.translation = [x, 100]
             m.tabSel.width = w
-            l.color = "0x10244AFF"
+            l.color = thm("0x10244AFF")
         else
-            l.color = "0xCFE0FFFF"
+            l.color = thm("0xCFE0FFFF")
         end if
         x = x + w + 12
     end for
@@ -567,15 +567,15 @@ sub paintRow(r as Integer, it as Object, selected as Boolean)
     y = row.y
     x0 = m.ROW_X
     if selected then
-        row.bg.color = "0xFFC845FF"
-        tc = "0x111111FF"
-        sc = "0x34415FFF"
-        rc = "0x222222FF"
+        row.bg.color = thm("0xFFC845FF")
+        tc = thm("0x111111FF")
+        sc = thm("0x34415FFF")
+        rc = thm("0x222222FF")
     else
-        row.bg.color = "0x1C4FA855"
-        tc = "0xFFFFFFFF"
-        sc = "0xA9BEE8FF"
-        rc = "0xCFE0FFFF"
+        row.bg.color = thm("0x1C4FA855")
+        tc = thm("0xFFFFFFFF")
+        sc = thm("0xA9BEE8FF")
+        rc = thm("0xCFE0FFFF")
     end if
     row.bg.visible = true
 
@@ -583,13 +583,13 @@ sub paintRow(r as Integer, it as Object, selected as Boolean)
     if it.badge <> "" then
         bw = Len(it.badge) * 15 + 32
         if bw < 104 then bw = 104
-        bg = "0x3B5B96FF"
-        if it.kind = "live" then bg = "0xE0243CFF"
-        if it.kind = "ppv" then bg = "0x7A3FB5FF"
-        if it.kind = "off" then bg = "0x4A5568FF"
+        bg = thm("0x3B5B96FF")
+        if it.kind = "live" then bg = thm("0xE0243CFF")
+        if it.kind = "ppv" then bg = thm("0x7A3FB5FF")
+        if it.kind = "off" then bg = thm("0x4A5568FF")
         if it.kind = "num" then
-            bg = "0x16397AFF"
-            if selected then bg = "0x7A5A10FF"
+            bg = thm("0x16397AFF")
+            if selected then bg = thm("0x7A5A10FF")
         end if
         row.badgeBg.width = bw
         row.badgeBg.color = bg

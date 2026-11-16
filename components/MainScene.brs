@@ -2,6 +2,7 @@
 ' modes: boot | needhost | error | live | home | guide | sports | search | ondemand | vod | rec
 
 sub init()
+    themeInit()
     m.video = m.top.findNode("video")
     m.guide = m.top.findNode("guide")
     m.hud = m.top.findNode("hud")
@@ -509,7 +510,7 @@ sub showGuideMenu()
     if m.favs[ch.numStr] <> invalid then favText = "Remove from favorites"
     viewText = "Show favorites only"
     if m.guideTitle = "FAVORITES" then viewText = "Show all channels"
-    buttons = [favText, viewText, "Category (All, Movies, Sports, News, Kids)", "Search", "Sports", "On Demand"]
+    buttons = [favText, viewText, "Category (All, Movies, Sports, News, Kids)", "Search", "Sports & Events", "On Demand"]
     actions = ["fav", "favview", "category", "search", "sports", "ondemand"]
     if m.homeOn then
         buttons.Push("Home")
@@ -748,7 +749,7 @@ function bannerInfo(ch as Object) as Object
         info.pct = (t - p.start) / (p.stop - p.start)
         info.rating = p.rating
         nx = progAfter(ch, p.stop)
-        if nx <> invalid then info.nextText = "Next: " + fmtClock(nx.start) + "  " + nx.title
+        if nx <> invalid then info.nextText = "up next: " + nx.title
     else
         if m.guideLoading then
             info.subtitle = "Guide loading..."
@@ -877,8 +878,17 @@ end sub
 
 ' ============================================================ HUD buttons
 sub onHudButton()
-    id = m.hud.buttonSelected
-    if id = "home" then
+    hudAction(m.hud.buttonSelected)
+end sub
+
+' the bar's screens, and the More list's actions
+sub hudAction(id as String)
+    if id = "more" then
+        showMore()
+    else if id = "record" then
+        m.hud.callFunc("hideAll")
+        if m.curIdx >= 0 and m.extern = invalid then dvrRecord(m.curIdx, progAt(m.channels[m.curIdx], nowEpoch()))
+    else if id = "home" then
         m.hud.callFunc("hideAll")
         openHome()
     else if id = "chup" then
@@ -911,6 +921,34 @@ sub onHudButton()
         m.hud.callFunc("hideAll")
         showMenu()
     end if
+end sub
+
+' More on the bar (as the web TV's More pop-up): what used to have its own button
+sub showMore()
+    m.hud.callFunc("hideAll")
+    buttons = []
+    actions = []
+    if m.extern = invalid and m.curIdx >= 0 then
+        if m.hud.isFav then buttons.Push("Remove from favorites") else buttons.Push("Add to favorites")
+        actions.Push("fav")
+    end if
+    buttons.Push("Favorites")
+    actions.Push("favs")
+    buttons.Push("Last channel")
+    actions.Push("last")
+    if m.extern = invalid and m.curIdx >= 0 then
+        buttons.Push("Record this show")
+        actions.Push("record")
+    end if
+    if m.hud.muted then buttons.Push("Unmute") else buttons.Push("Mute")
+    actions.Push("mute")
+    buttons.Push("Show info")
+    actions.Push("info")
+    buttons.Push("Menu")
+    actions.Push("menu")
+    buttons.Push("Close")
+    actions.Push("close")
+    showDialog("more", "More", [], buttons, actions)
 end sub
 
 ' ============================================================ guide
@@ -1000,7 +1038,7 @@ sub onGuideOptions()
 end sub
 
 ' ------------------------------------------------------------ filtered guides
-' ============================================================ Sports & PPV
+' ============================================================ Sports & Events
 sub runSportsTask(mode as String, group as String)
     t = CreateObject("roSGNode", "LoadTask")
     t.mode = mode
@@ -1069,9 +1107,9 @@ sub onSportsTaskResult(event as Object)
         else if sportsLeagueSel() <> "" then
             ' live games can still be listed without the TunerBox sports feed
             m.sports.data = { on_now: [], upcoming: [], channels: [], groups: [] }
-            showToast("Could not load Sports & PPV from TunerBox")
+            showToast("Could not load Sports & Events from TunerBox")
         else
-            m.sports.message = "Could not load Sports & PPV from TunerBox. Press Back."
+            m.sports.message = "Could not load Sports & Events from TunerBox. Press Back."
         end if
     else if md = "espn" then
         sel = t.leagues
@@ -1197,8 +1235,8 @@ end sub
 function numToStr(v as Dynamic) as String
     t = Type(v)
     if t = "String" or t = "roString" then return v
-    if t = "Float" or t = "roFloat" or t = "Double" then return Str(Int(v)).Trim()
-    return Str(v).Trim()
+    if t = "Float" or t = "roFloat" or t = "Double" then return Int(v).ToStr()
+    return anyStr(v)
 end function
 
 ' tune a TunerBox channel number: use the loaded list when it's there, otherwise stream it directly
@@ -1438,7 +1476,7 @@ sub dvrRecordRaw(num as String, startAt as Integer, title as String)
     t.mode = "record"
     t.baseUrl = m.base
     t.recNumber = num
-    t.recStart = Str(startAt).Trim()
+    t.recStart = startAt.ToStr()     ' Str() would send "1.794834e+09"
     t.observeField("result", "onRecordResult")
     m.sportsTasks.Push(t)
     if m.sportsTasks.Count() > 12 then m.sportsTasks.Shift()
@@ -1460,8 +1498,27 @@ sub showDvr()
 end sub
 
 ' ============================================================ dialogs
+' dialogs in the theme's colours (as the web's dialogs)
+function dialogPalette() as Object
+    p = CreateObject("roSGNode", "RSGPalette")
+    p.colors = {
+        DialogBackgroundColor: thm("0x0B1D46FF"),
+        DialogItemColor: thm("0xDCE8FFFF"),
+        DialogTextColor: thm("0xDCE8FFFF"),
+        DialogFocusColor: thm("0xFFC845FF"),
+        DialogFocusItemColor: thm("0x111111FF"),
+        DialogSecondaryTextColor: thm("0x9FB3DCFF"),
+        DialogSecondaryItemColor: thm("0x4F86E8FF"),
+        DialogInputFieldColor: thm("0x10244AFF"),
+        DialogKeyboardColor: thm("0x10244AFF"),
+        DialogFootprintColor: thm("0x9FB3DCFF")
+    }
+    return p
+end function
+
 sub showDialog(kind as String, title as String, message as Object, buttons as Object, actions as Object)
     dlg = CreateObject("roSGNode", "StandardMessageDialog")
+    dlg.palette = dialogPalette()
     dlg.title = title
     dlg.message = message
     dlg.buttons = buttons
@@ -1475,6 +1532,7 @@ end sub
 
 sub showKeyboard(kind as String, title as String, message as Object, initial as String)
     dlg = CreateObject("roSGNode", "StandardKeyboardDialog")
+    dlg.palette = dialogPalette()
     dlg.title = title
     dlg.message = message
     dlg.text = initial
@@ -1524,7 +1582,9 @@ sub onDlgButton()
     if kind = "host" or kind = "jump" or kind = "vodsearch" then txt = dlg.text
     dlg.close = true
 
-    if kind = "host" then
+    if kind = "more" then
+        if action <> "close" then hudAction(action)
+    else if kind = "host" then
         if action = "ok" and txt.Trim() <> "" then
             regWrite("host", txt.Trim())
             regWrite("lastUrl", "")
@@ -1742,6 +1802,7 @@ function menuItems() as Object
         { id: "compat", label: "720p mode (all channels)", value: compatLabel() },
         { id: "hideun", label: "Hide unmapped (20000+)", value: hideLabel() },
         { id: "fit", label: "Screen fit (overscan)", value: fitLabel() },
+        { id: "theme", label: "Theme", value: themeMenuLabel() },
         { id: "leagues", label: "Live sports leagues", value: leaguesLabel() },
         { id: "stats", label: "Stream stats" },
         { id: "about", label: "About" },
@@ -1794,6 +1855,44 @@ sub showLeagues()
     m.menu.callFunc("openMenu")
 end sub
 
+' ------------------------------------------------------------ colour theme (settings page inside the menu)
+' As the web TV screens: TunerBox's Setup > Settings > Screens > Theme is the default for every screen, and this
+' Roku can pick its own in Menu > Theme.
+function themeMenuLabel() as String
+    lbl = themeLabel(themeName())
+    if regRead("theme", "") = "" then return lbl + " (default)"
+    return lbl
+end function
+
+function themeItems() as Object
+    own = regRead("theme", "")
+    def = themeLabel(regRead("themeServer", "midnight"))
+    items = [{ id: "th_", label: "Use the default (" + def + ")", value: onOff(own = "") }]
+    for each t in themeList()
+        items.Push({ id: "th_" + t[0], label: t[1], value: onOff(own = t[0]) })
+    end for
+    items.Push({ id: "thback", label: "Back to menu" })
+    return items
+end function
+
+sub showThemes()
+    m.menuPage = "themes"
+    m.menu.heading = "Theme"
+    m.menu.items = themeItems()
+    m.menu.subtitle = "Colours for this Roku. TunerBox's Setup > Settings > Screens sets the default."
+    m.menu.callFunc("openMenu")
+end sub
+
+' recolour everything on screen from the current theme to another
+sub applyTheme(name as String)
+    if not themeValid(name) then name = "midnight"
+    old = themeName()
+    if old = name then return
+    m.global.theme = name
+    themeWalk(m.top, themeReverse(themeMap(old)), themeMap(name), true)
+    if m.mode = "home" then m.home.callFunc("reload")
+end sub
+
 sub toggleLeague(id as String)
     out = []
     sel = sportsLeagueSel()
@@ -1811,7 +1910,7 @@ sub closeMenuView()
 end sub
 
 sub onMenuClose()
-    if m.menuPage = "leagues" then
+    if m.menuPage = "leagues" or m.menuPage = "themes" then
         showMenu()
         return
     end if
@@ -1832,8 +1931,20 @@ sub onMenuSelected()
         end if
         return
     end if
+    if m.menuPage = "themes" then
+        if Left(id, 3) = "th_" then
+            regWrite("theme", Mid(id, 4))
+            applyTheme(themeChosen())
+            m.menu.items = themeItems()
+        else if id = "thback" then
+            showMenu()
+        end if
+        return
+    end if
     if id = "leagues" then
         showLeagues()
+    else if id = "theme" then
+        showThemes()
     else if id = "fmt" or id = "compat" or id = "homestart" then
         ' toggles keep the menu open and refresh the value in place
         runMenuAction(id)
@@ -1916,6 +2027,13 @@ end sub
 sub setPanelPreview(view as Object)
     pr = view.previewRect
     if pr = invalid or pr.Count() <> 4 then return
+    if pr[2] >= 1920 then
+        ' full screen behind the panel (Home): the whole picture, not fitted to the safe area
+        m.video.translation = [0, 0]
+        m.video.width = 1920
+        m.video.height = 1080
+        return
+    end if
     s = m.fitScale
     m.video.translation = [m.fitOff[0] + Int(pr[0] * s), m.fitOff[1] + Int(pr[1] * s)]
     m.video.width = Int(pr[2] * s)
@@ -2378,6 +2496,13 @@ sub onHomeApi(event as Object)
 end sub
 
 sub applySettings(d as Object)
+    ' TunerBox's theme for every screen (Light is for Setup and phones; TV screens stay dark with it)
+    th = d.theme
+    if th <> invalid and GetInterface(th, "ifString") <> invalid then
+        if not themeValid(th) then th = "midnight"
+        if th <> regRead("themeServer", "") then regWrite("themeServer", th)
+        applyTheme(themeChosen())
+    end if
     on = false
     v = d.home_screen
     if v <> invalid and GetInterface(v, "ifBoolean") <> invalid then on = v

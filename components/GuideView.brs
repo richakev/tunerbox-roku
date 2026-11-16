@@ -2,6 +2,7 @@
 ' Layout constants are for a 1920x1080 scene.
 
 sub init()
+    themeInit()
     m.PAD = 20              ' gap between the safe-area edge and the content
     m.CH_W = 400
     m.WIN = 7200            ' seconds visible
@@ -65,12 +66,15 @@ sub init()
     m.GENRES = [["", "All"], ["movies", "Movies"], ["sports", "Sports"], ["news", "News"], ["kids", "Kids"]]
     m.genre = ""
     m.genreNone = false     ' that genre isn't on anywhere: every channel shown, all dimmed
-    m.pick = false          ' the highlight is on the category picker
+    m.pick = false          ' the highlight is on the filter pills
+    m.pickI = 0             ' which pill: 0 = Favorites, 1.. = m.GENRES
+    m.favOnly = false       ' showing favorites only (the scene opened the guide with title "FAVORITES")
+    m.PILL_H = 44
     m.baseView = []         ' the channels before filtering (all, or favorites only)
 
     m.bgGroup = m.top.findNode("bgGroup")
     m.hdrBar = m.top.findNode("hdrBar")
-    m.pickRect = m.top.findNode("pickRect")
+    m.pillsGroup = m.top.findNode("pillsGroup")
     m.safe = [0, 0, 0, 0]
     layout()
 end sub
@@ -100,13 +104,13 @@ sub layout()
     m.top.previewRect = [px, py, m.PV_W, m.PV_H]
     pr = px + m.PV_W
     pb = py + m.PV_H
-    bg = "0x0B1D46FF"
+    bg = thm("0x0B1D46FF")
     m.bgGroup.removeChildrenIndex(m.bgGroup.getChildCount(), 0)
     m.bgGroup.appendChild(mkRect(0, 0, 1920, py, bg))
     m.bgGroup.appendChild(mkRect(0, py, px, m.PV_H, bg))
     m.bgGroup.appendChild(mkRect(pr, py, 1920 - pr, m.PV_H, bg))
     m.bgGroup.appendChild(mkRect(0, pb, 1920, 1080 - pb, bg))
-    bc = "0x4F86E8FF"
+    bc = thm("0x4F86E8FF")
     m.bgGroup.appendChild(mkRect(px - 2, py - 2, m.PV_W + 4, 2, bc))
     m.bgGroup.appendChild(mkRect(px - 2, pb, m.PV_W + 4, 2, bc))
     m.bgGroup.appendChild(mkRect(px - 2, py - 2, 2, m.PV_H + 4, bc))
@@ -133,12 +137,12 @@ sub layout()
     m.CH_X = L
     m.TIME_X = L + m.CH_W
     m.PPM = (R - m.TIME_X) / 120.0     ' pixels per minute (2-hour window)
-    m.HDR_Y = pb + 15
+    m.FILT_X = L
+    m.FILT_Y = pb + 14
+    m.HDR_Y = m.FILT_Y + m.PILL_H + 12
     m.hdrBar.translation = [L, m.HDR_Y]
     m.hdrBar.width = R - L
     m.dateLbl.translation = [L + 14, m.HDR_Y]
-    m.pickRect.translation = [L, m.HDR_Y]
-    m.pickRect.width = m.CH_W
     m.ROWS_Y = m.HDR_Y + m.HDR_H + 4
 
     hintY = B - m.HINT_H
@@ -206,7 +210,9 @@ sub openGuide(info as Object)
         end for
     end if
     m.filterLbl.text = ""
-    if info.title <> invalid then m.filterLbl.text = info.title
+    m.favOnly = (info.title <> invalid and info.title = "FAVORITES")
+    ' Favorites shows as a pill; any other title stays in the corner
+    if info.title <> invalid and not m.favOnly then m.filterLbl.text = info.title
     m.baseView = m.view
     m.genre = ""
     m.genreNone = false
@@ -270,8 +276,8 @@ sub redraw()
 
     for k = 0 to 3
         cx = m.TIME_X + Int(k * 30 * m.PPM)
-        m.rowsGroup.appendChild(mkRect(cx, m.HDR_Y + 8, 2, m.HDR_H - 16, "0x5A87D8FF"))
-        m.rowsGroup.appendChild(mkLabel(cx + 12, m.HDR_Y, 300, m.HDR_H, fmtClock(ws + k * 1800), 31, true, "0xFFFFFFFF"))
+        m.rowsGroup.appendChild(mkRect(cx, m.HDR_Y + 8, 2, m.HDR_H - 16, thm("0x5A87D8FF")))
+        m.rowsGroup.appendChild(mkLabel(cx + 12, m.HDR_Y, 300, m.HDR_H, fmtClock(ws + k * 1800), 31, true, thm("0xFFFFFFFF")))
     end for
 
     count = m.view.Count()
@@ -284,7 +290,7 @@ sub redraw()
         y = m.ROWS_Y + r * m.ROW_H
         h = m.ROW_H - 3
 
-        crect = mkRect(m.CH_X, y, m.CH_W, h, "0x12408FFF")
+        crect = mkRect(m.CH_X, y, m.CH_W, h, thm("0x12408FFF"))
         star = CreateObject("roSGNode", "Poster")
         star.translation = [m.CH_X + 10, y + Int((h - 30) / 2)]
         star.width = 30
@@ -294,14 +300,14 @@ sub redraw()
         else
             star.uri = "pkg:/images/star_off.png"
         end if
-        cnum = mkLabel(m.CH_X + 48, y, 88, h, ch.numStr, 36, true, "0xFFFFFFFF")
+        cnum = mkLabel(m.CH_X + 48, y, 88, h, ch.numStr, 36, true, thm("0xFFFFFFFF"))
         logo = CreateObject("roSGNode", "Poster")
         logo.translation = [m.CH_X + 138, y + 10]
         logo.width = 84
         logo.height = h - 20
         logo.loadDisplayMode = "scaleToFit"
         logo.uri = ch.logo
-        cname = mkLabel(m.CH_X + 230, y, 164, h, ch.name, 29, true, "0xFFFFFFFF")
+        cname = mkLabel(m.CH_X + 230, y, 164, h, ch.name, 29, true, thm("0xFFFFFFFF"))
         m.rowsGroup.appendChild(crect)
         m.rowsGroup.appendChild(star)
         m.rowsGroup.appendChild(cnum)
@@ -332,7 +338,7 @@ sub redraw()
     end for
 
     ' "now" marker
-    m.nowLine = mkRect(0, m.HDR_Y + m.HDR_H, 3, shown * m.ROW_H, "0xFF3B3BFF")
+    m.nowLine = mkRect(0, m.HDR_Y + m.HDR_H, 3, shown * m.ROW_H, thm("0xFF3B3BFF"))
     m.rowsGroup.appendChild(m.nowLine)
     updateNowLine()
 
@@ -349,9 +355,9 @@ function buildRowCells(ch as Object, ws as Integer, we as Integer) as Object
                 s = p.start
                 if s < t then s = t
                 if m.genre <> "" and genreOf(p.cat) <> m.genre then
-                    cells.Push({ start: s, stop: p.stop, title: p.title, prog: p, base: "0x1C2B4EFF", txtColor: "0x8FA3C8FF" })
+                    cells.Push({ start: s, stop: p.stop, title: p.title, prog: p, base: thm("0x1C2B4EFF"), txtColor: thm("0x8FA3C8FF") })
                 else
-                    cells.Push({ start: s, stop: p.stop, title: p.title, prog: p, base: catColor(p.cat), txtColor: "0xFFFFFFFF" })
+                    cells.Push({ start: s, stop: p.stop, title: p.title, prog: p, base: catColor(p.cat), txtColor: thm("0xFFFFFFFF") })
                 end if
                 if p.stop > t then t = p.stop
             end if
@@ -362,7 +368,7 @@ function buildRowCells(ch as Object, ws as Integer, we as Integer) as Object
 end function
 
 function emptyCell(s as Integer, e as Integer) as Object
-    return { start: s, stop: e, title: "No Data", prog: invalid, base: "0x1A2A4DFF", txtColor: "0x8FA3C8FF" }
+    return { start: s, stop: e, title: "No Data", prog: invalid, base: thm("0x1A2A4DFF"), txtColor: thm("0x8FA3C8FF") }
 end function
 
 sub updateNowLine()
@@ -416,8 +422,8 @@ end sub
 
 sub styleCell(c as Object, focused as Boolean)
     if focused then
-        c.rect.color = "0xFFC845FF"
-        if c.lbl <> invalid then c.lbl.color = "0x111111FF"
+        c.rect.color = thm("0xFFC845FF")
+        if c.lbl <> invalid then c.lbl.color = thm("0x111111FF")
     else
         c.rect.color = c.base
         if c.lbl <> invalid then c.lbl.color = c.txtColor
@@ -428,11 +434,11 @@ sub styleChannel(r as Integer, focused as Boolean)
     if r < 0 or r >= m.chanNodes.Count() then return
     n = m.chanNodes[r]
     if focused then
-        n.rect.color = "0x2A66C8FF"
-        n.num.color = "0xFFC845FF"
+        n.rect.color = thm("0x2A66C8FF")
+        n.num.color = thm("0xFFC845FF")
     else
-        n.rect.color = "0x12408FFF"
-        n.num.color = "0xFFFFFFFF"
+        n.rect.color = thm("0x12408FFF")
+        n.num.color = thm("0xFFFFFFFF")
     end if
 end sub
 
@@ -590,7 +596,21 @@ function onKeyEvent(key as String, press as Boolean) as Boolean
     if not m.top.visible or m.fCell = invalid then return false
     if m.pick then
         if key = "left" or key = "right" then
-            if key = "right" then cycleGenre(1, false) else cycleGenre(-1, false)
+            ' along the pills; a category pill filters as soon as it's highlighted, Favorites waits for OK
+            ni = m.pickI + 1
+            if key = "left" then ni = m.pickI - 1
+            if ni < 0 or ni > m.GENRES.Count() then return true
+            m.pickI = ni
+            if ni >= 1 then
+                m.genre = m.GENRES[ni - 1][0]
+                refilter(false)
+            else
+                drawPicker()
+                pickerInfo()
+            end if
+            return true
+        else if key = "OK" and m.pickI = 0 then
+            m.top.menuRequest = "favview"
             return true
         else if key = "OK" or key = "down" or key = "back" or key = "up" then
             setPick(false)
@@ -600,7 +620,7 @@ function onKeyEvent(key as String, press as Boolean) as Boolean
         setPick(false)
     end if
     if key = "up" and m.row = 0 then
-        ' Up on the first channel: the category picker
+        ' Up on the first channel: the filter pills
         setPick(true)
         return true
     end if
@@ -665,23 +685,10 @@ end sub
 
 ' ------------------------------------------------------------ hint bar
 sub buildHints(x0 as Integer, y as Integer, maxW as Integer)
-    m.hintsGroup.removeChildrenIndex(m.hintsGroup.getChildCount(), 0)
-    hints = [["OK", "Watch/Options"], ["*", "Options"], ["R", "Record"], ["/", "Search"], ["T", "Sports"], ["V", "Favs"], ["UP", "Category"], ["REW/FF", "Page"], ["< >", "Time"], ["0-9", "Ch#"], ["BACK", "Exit"]]
-    x = 0
-    for each hnt in hints
-        capW = Len(hnt[0]) * 16 + 26
-        m.hintsGroup.appendChild(mkRect(x, 0, capW, m.HINT_H, "0x2B3A57FF"))
-        m.hintsGroup.appendChild(mkLabel(x, 0, capW, m.HINT_H, hnt[0], 26, true, "0xFFFFFFFF"))
-        m.hintsGroup.getChild(m.hintsGroup.getChildCount() - 1).horizAlign = "center"
-        x = x + capW + 8
-        dW = Len(hnt[1]) * 14 + 8
-        m.hintsGroup.appendChild(mkLabel(x, 0, dW, m.HINT_H, hnt[1], 26, false, "0xC5D3EFFF"))
-        x = x + dW + 20
-    end for
-    ' only the hint bar shrinks if a large overscan setting leaves it too little room
-    sc = 1.0
-    if x - 20 > maxW then sc = maxW / (x - 20)
-    m.hintsGroup.scale = [sc, sc]
+    ' as the web guide's shorter footer; the filters are on the pills now
+    hints = [["OK", "Watch / Options"], ["*", "Options"], ["< >", "Time"], ["REW/FF", "Page"], ["UP", "Filters"], ["BACK", "Close"]]
+    buildKeyHints(m.hintsGroup, hints, m.HINT_H, maxW)
+    sc = m.hintsGroup.scale[0]
     m.hintsGroup.translation = [x0, y + Int(m.HINT_H * (1 - sc) / 2)]
 end sub
 
@@ -780,33 +787,82 @@ end sub
 
 sub setPick(on as Boolean)
     m.pick = on
+    if on then
+        ' start on the category in use
+        m.pickI = 1
+        for k = 0 to m.GENRES.Count() - 1
+            if m.GENRES[k][0] = m.genre then m.pickI = k + 1
+        end for
+    end if
     drawPicker()
     applyFocus()
 end sub
 
-' the header's channel column: the date (with the category when one is picked), or the picker itself
+' the filter pills (as the web guide): the one in use filled in, the highlighted one in the accent colour.
+' A category with nothing on in these hours says so ("none"); every channel stays listed, dimmed.
 sub drawPicker()
-    lbl = genreLabel()
-    if m.pick and m.genre = "" then lbl = "All channels"
-    if m.genreNone then lbl = lbl + " " + Chr(183) + " none"
-    if m.pick then
-        m.pickRect.visible = true
-        m.dateLbl.color = "0x10244AFF"
-        m.dateLbl.text = "<  " + lbl + "  >"
-    else
-        m.pickRect.visible = false
-        m.dateLbl.color = "0xFFC845FF"
-        if m.genre = "" then
-            m.dateLbl.text = fmtDay(m.winStart)
+    m.dateLbl.text = fmtDay(m.winStart)
+    g = m.pillsGroup
+    g.removeChildrenIndex(g.getChildCount(), 0)
+    x = m.FILT_X
+    y = m.FILT_Y
+    for i = 0 to m.GENRES.Count()
+        if i = 0 then
+            txt = "Favorites"
+            isOn = m.favOnly
         else
-            m.dateLbl.text = lbl + " " + Chr(183) + " " + fmtDay(m.winStart)
+            txt = m.GENRES[i - 1][1]
+            isOn = (m.GENRES[i - 1][0] = m.genre)
+            if isOn and m.genreNone then txt = txt + " " + Chr(183) + " none"
         end if
-    end if
+        focus = m.pick and m.pickI = i
+        if focus then
+            bg = thm("0xFFC845FF")
+            fg = thm("0x111111FF")
+        else if isOn then
+            bg = thm("0xE6EEFFFF")
+            fg = thm("0x10244AFF")
+        else
+            bg = thm("0x163A7DFF")
+            fg = thm("0x9FB3DCFF")
+        end if
+        lbl = mkLabel(0, y, 0, m.PILL_H, txt, 26, true, fg)
+        tw = lbl.boundingRect().width
+        if tw <= 0 then tw = Len(txt) * 14
+        pad = 22
+        starW = 0
+        if i = 0 then starW = 30
+        w = tw + pad * 2 + starW
+        g.appendChild(mkPill(x, y, w, m.PILL_H, bg))
+        if i = 0 then
+            star = CreateObject("roSGNode", "Poster")
+            star.translation = [x + pad - 4, y + 9]
+            star.width = 26
+            star.height = 26
+            if isOn and not focus then star.uri = "pkg:/images/star_on.png" else star.uri = "pkg:/images/star_off.png"
+            g.appendChild(star)
+        end if
+        lbl.translation = [x + pad + starW, y]
+        g.appendChild(lbl)
+        x = x + w + 12
+    end for
 end sub
 
 sub pickerInfo()
-    setTitle("Filter by category", false)
     m.badge.visible = false
+    if m.pickI = 0 then
+        if m.favOnly then
+            setTitle("Favorites only", false)
+            m.subLbl.text = "OK: show every channel again"
+        else
+            setTitle("Favorites", false)
+            m.subLbl.text = "OK: show only your favorite channels"
+        end if
+        m.metaLbl.text = "Right: categories      Down: back to the channels"
+        m.descLbl.text = "Press * on a channel (Options > Favorite) to add it to your favorites."
+        return
+    end if
+    setTitle("Filter by category", false)
     m.subLbl.text = "Left / Right: All channels, Movies, Sports, News or Kids"
     m.metaLbl.text = "OK or Down to go back to the channels"
     m.descLbl.text = "Lists only the channels with a show of that category on in the hours shown. Shows of other categories are dimmed."

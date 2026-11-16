@@ -5,12 +5,13 @@
 ' does what a picked tile asks for (this view only draws and moves the selection).
 
 sub init()
-    m.PV = [40, 30, 560, 315]
+    themeInit()
+    m.PV = [0, 0, 1920, 1080]     ' live TV fills the screen behind Home (the scene doesn't fit it to the safe area)
     m.X0 = 40
     m.W = 1840
-    m.Y0 = 368
+    m.Y0 = 434
     m.YMAX = 1016
-    m.NAV_H = 72
+    m.NAV_Y = 22            ' the shortcuts sit in the top bar, not in the rows
     m.LABEL_H = 38
     m.ROW_H = 214
     m.TW = 288
@@ -20,15 +21,12 @@ sub init()
     m.NSLOTS = 3
     m.NTILES = 14
     m.RESUME_MIN = 30
-    m.YELLOW = "0xFFC845FF"
-    m.DIM = "0x9FB3DCFF"
-    ' tile colours by name (as the web: a title keeps its colour)
-    m.TONES = ["0x163A7DFF", "0x3F2A7EFF", "0x145A3AFF", "0x6A3A12FF", "0x0D6C74FF", "0x5A1F4AFF", "0x1F4FA3FF", "0x4A3A10FF"]
+    homeColors()
     m.NAV = [
         { t: "nav", id: "tv", label: "Watch TV", info: "Back to full-screen TV" },
         { t: "nav", id: "guide", label: "Guide", info: "What's on, channel by channel" },
         { t: "nav", id: "ondemand", label: "On Demand", info: "Movies and TV shows from your playlists" },
-        { t: "nav", id: "sports", label: "Sports", info: "Games on now and coming up, scores and event feeds" },
+        { t: "nav", id: "sports", label: "Sports & Events", info: "Games on now and coming up, scores and event feeds" },
         { t: "nav", id: "search", label: "Search", info: "Channels, shows, games, movies and TV shows" },
         { t: "nav", id: "menu", label: "Menu", info: "Favorites, settings and more" }
     ]
@@ -38,25 +36,33 @@ sub init()
     m.subLbl = m.top.findNode("subLbl")
     m.metaLbl = m.top.findNode("metaLbl")
     m.descLbl = m.top.findNode("descLbl")
+    m.brandLbl = m.top.findNode("brandLbl")
+    m.brand2Lbl = m.top.findNode("brand2Lbl")
     m.clockLbl = m.top.findNode("clockLbl")
     m.dateLbl = m.top.findNode("dateLbl")
     m.rowsGroup = m.top.findNode("rowsGroup")
+    ' the row below the last full one peeks out (cut off above the key hints), so it's clear there's more
+    m.rowsGroup.clippingRect = [-200, -200, 2320, m.YMAX + 200 - 4]
     m.msgLbl = m.top.findNode("msgLbl")
-    m.footLbl = m.top.findNode("footLbl")
+    m.hintsGroup = m.top.findNode("hintsGroup")
     m.refreshTimer = m.top.findNode("refreshTimer")
     m.clockTimer = m.top.findNode("clockTimer")
     m.refreshTimer.observeField("fire", "onRefreshTimer")
     m.clockTimer.observeField("fire", "drawClock")
 
-    m.titleLbl.font.size = 46
+    m.titleLbl.font.size = 62
     m.subLbl.font.size = 30
-    m.metaLbl.font.size = 26
-    m.descLbl.font.size = 25
+    m.metaLbl.font.size = 27
+    m.descLbl.font.size = 26
+    m.brandLbl.font.size = 40
+    m.brand2Lbl.font.size = 40
     m.clockLbl.font.size = 30
     m.dateLbl.font.size = 25
+    ' "TunerBox", with "Box" in the accent colour
+    m.brand2Lbl.translation = [m.X0 + m.brandLbl.boundingRect().width, 20]
+    m.NAV_X = m.X0 + m.brandLbl.boundingRect().width + m.brand2Lbl.boundingRect().width + 40
     m.msgLbl.font.size = 32
-    m.footLbl.font.size = 25
-    m.footLbl.text = "OK  Watch / Open      Arrows  Move      *  Favorite      Rew / FF  Start / end of row      Back  Live TV"
+    buildKeyHints(m.hintsGroup, [["OK", "Watch / Open"], ["ARROWS", "Move"], ["*", "Favorite"], ["REW/FF", "Start / end of row"], ["BACK", "Live TV"]], 36, 1840)
 
     m.rows = []
     m.r = 0
@@ -70,15 +76,22 @@ sub init()
     buildNodes()
 end sub
 
+' colours kept for drawing; again on each open, in case the theme changed
+sub homeColors()
+    m.YELLOW = thm("0xFFC845FF")
+    m.DIM = thm("0x9FB3DCFF")
+    ' tile colours by name (as the web: a title keeps its colour)
+    m.TONES = [thm("0x163A7DFF"), thm("0x3F2A7EFF"), thm("0x145A3AFF"), thm("0x6A3A12FF"), thm("0x0D6C74FF"), thm("0x5A1F4AFF"), thm("0x1F4FA3FF"), thm("0x4A3A10FF")]
+end sub
+
 ' ============================================================ nodes (created once, then only updated)
 sub buildNodes()
     m.chips = []
     for i = 0 to m.NAV.Count() - 1
         c = {}
-        c.edge = mkRect(0, 0, 10, 54, "0x34466BFF")
-        c.bg = mkRect(0, 0, 10, 50, "0x1B2B50FF")
-        c.lbl = mkLabel(0, 0, 0, 54, "", 28, true, "0xFFFFFFFF")
-        for each k in ["edge", "bg", "lbl"]
+        c.bg = mkPill(0, 0, 10, 52, thm("0xFFC845FF"))
+        c.lbl = mkLabel(0, 0, 0, 52, "", 28, true, thm("0x9FB3DCFF"))
+        for each k in ["bg", "lbl"]
             c[k].visible = false
             m.rowsGroup.appendChild(c[k])
         end for
@@ -97,17 +110,17 @@ sub buildNodes()
             n.ring = mkRect(0, 0, 10, 10, m.YELLOW)
             n.bg = mkRect(0, 0, 10, 10, m.TONES[0])
             n.logo = mkPoster("scaleToFit")
-            n.big = mkLabel(0, 0, 10, 70, "", 54, true, "0xFFFFFFCC")
+            n.big = mkLabel(0, 0, 10, 70, "", 54, true, thm("0xFFFFFFCC"))
             n.big.horizAlign = "center"
-            n.pic = mkPoster("scaleToFill")
-            n.grad = mkRect(0, 0, 10, 72, "0x000000B8")
-            n.title = mkLabel(0, 0, 10, 30, "", 24, true, "0xFFFFFFFF")
+            n.pic = mkPoster("scaleToZoom")     ' fill the tile, keep the shape, trim the edges (as the web's object-fit: cover)
+            n.grad = mkRect(0, 0, 10, 72, thm("0x000000B8"))
+            n.title = mkLabel(0, 0, 10, 30, "", 24, true, thm("0xFFFFFFFF"))
             n.title.ellipsizeOnBoundary = true
-            n.subt = mkLabel(0, 0, 10, 26, "", 19, false, "0xD7E3FFFF")
-            n.badgeBg = mkRect(0, 0, 10, 30, "0x000000B8")
+            n.subt = mkLabel(0, 0, 10, 26, "", 19, false, thm("0xD7E3FFFF"))
+            n.badgeBg = mkRect(0, 0, 10, 30, thm("0x000000B8"))
             n.badge = mkLabel(0, 0, 10, 30, "", 19, true, m.YELLOW)
             n.badge.horizAlign = "center"
-            n.barBg = mkRect(0, 0, 10, 7, "0x000000AA")
+            n.barBg = mkRect(0, 0, 10, 7, thm("0x000000AA"))
             n.bar = mkRect(0, 0, 0, 7, m.YELLOW)
             n.logo.observeField("loadStatus", "onImgStatus")
             n.pic.observeField("loadStatus", "onImgStatus")
@@ -135,12 +148,15 @@ end function
 sub onImgStatus(event as Object)
     p = event.getRoSGNode()
     if p.loadStatus <> "failed" or p.uri = "" then return
+    print "[home] picture didn't load: "; p.uri
     m.bad[p.uri] = true
     if m.top.visible then drawRows()
 end sub
 
 ' ============================================================ open / close / load (called by the scene)
 sub openHome()
+    homeColors()
+    m.bad = {}
     m.top.visible = true
     m.top.setFocus(true)
     m.clockTimer.control = "start"
@@ -169,6 +185,8 @@ sub reload()
 end sub
 
 sub onRefreshTimer()
+    ' pictures that failed get another try (TunerBox makes each one the first time it's asked, which can be slow)
+    m.bad = {}
     if m.top.visible then load(false)
 end sub
 
@@ -225,6 +243,11 @@ function buildRows(d as Dynamic) as Object
     rows = [{ id: "nav", label: "", poster: false, items: m.NAV }]
     if not isAA(d) then return rows
     addRow(rows, "fav", "Favorites on now", false, tagged(d.favorites, "chan", ""))
+    teams = []
+    for each p in listOf(d.teams)
+        teams.Push({ t: "game", p: p })
+    end for
+    addRow(rows, "teams", "Your teams on now", false, teams)
     ' posters and wide recording tiles in separate rows, so each row has one shape
     addRow(rows, "cont", "Continue Watching: On Demand", true, tagged(d["continue"], "vod", "vod"))
     addRow(rows, "contrec", "Continue Watching: Recordings", false, tagged(d["continue"], "rec", "rec"))
@@ -311,7 +334,7 @@ function minI(a as Integer, b as Integer) as Integer
 end function
 
 function rowHeight(i as Integer) as Integer
-    if m.rows[i].id = "nav" then return m.NAV_H
+    if m.rows[i].id = "nav" then return 0
     return m.ROW_H
 end function
 
@@ -320,9 +343,14 @@ function placeRows(top0 as Integer) as Object
     out = []
     y = m.Y0
     for i = top0 to m.rows.Count() - 1
+        if m.rows[i].id = "nav" then continue for     ' in the top bar
         h = rowHeight(i)
-        if y + h > m.YMAX + 2 then exit for
-        out.Push({ i: i, y: y })
+        if y + h > m.YMAX + 2 then
+            ' not enough room: show its label and the top of its tiles if that much fits
+            if y + m.LABEL_H + 60 <= m.YMAX then out.Push({ i: i, y: y, part: true })
+            exit for
+        end if
+        out.Push({ i: i, y: y, part: false })
         y = y + h
     end for
     return out
@@ -343,10 +371,16 @@ sub render()
     end if
 end sub
 
+' the time (bold) and the date, right-aligned in the top bar
 sub drawClock()
     t = nowEpoch()
     m.clockLbl.text = fmtClock(t)
     m.dateLbl.text = fmtDay(t)
+    dw = m.dateLbl.boundingRect().width
+    cw = m.clockLbl.boundingRect().width
+    r = m.X0 + m.W
+    m.dateLbl.translation = [r - dw, 22]
+    m.clockLbl.translation = [r - dw - 14 - cw, 22]
 end sub
 
 sub drawRows()
@@ -363,25 +397,16 @@ sub drawRows()
         placed = placeRows(m.top0)
     end while
 
-    navShown = false
+    ' the shortcuts are always in the top bar
+    if m.rows[0].id = "nav" then drawNav(m.rows[0], m.NAV_Y, m.r = 0)
     slot = 0
     for each pr in placed
         row = m.rows[pr.i]
-        if row.id = "nav" then
-            drawNav(row, pr.y, pr.i = m.r)
-            navShown = true
-        else if slot < m.NSLOTS then
+        if slot < m.NSLOTS then
             drawSlot(m.slots[slot], row, pr.y, pr.i = m.r)
             slot = slot + 1
         end if
     end for
-    if not navShown then
-        for each c in m.chips
-            c.edge.visible = false
-            c.bg.visible = false
-            c.lbl.visible = false
-        end for
-    end if
     for s = slot to m.NSLOTS - 1
         m.slots[s].label.visible = false
         for each tile in m.slots[s].tiles
@@ -390,45 +415,42 @@ sub drawRows()
     end for
 end sub
 
+' is row i fully on screen? (a row that only peeks out doesn't count: moving onto it scrolls)
 function hasRow(placed as Object, i as Integer) as Boolean
     for each pr in placed
-        if pr.i = i then return true
+        if pr.i = i and not pr.part then return true
     end for
     return false
 end function
 
 sub drawNav(row as Object, y as Integer, cur as Boolean)
+    ' as the web top bar: plain dimmed words; the highlighted one in an accent pill
     sel = colOf(row)
-    x = m.X0
+    x = m.NAV_X
     for i = 0 to m.chips.Count() - 1
         c = m.chips[i]
         vis = (i < row.items.Count())
-        c.edge.visible = vis
-        c.bg.visible = vis
         c.lbl.visible = vis
+        c.bg.visible = false
         if vis then
             c.lbl.width = 0
             c.lbl.text = row.items[i].label
             w = c.lbl.boundingRect().width
             if w <= 0 then w = Len(row.items[i].label) * 16
-            w = w + 52
-            c.edge.translation = [x, y + 6]
-            c.edge.width = w
-            c.bg.translation = [x + 2, y + 8]
-            c.bg.width = w - 4
-            c.lbl.translation = [x, y + 6]
+            w = w + 40
+            c.lbl.translation = [x, y]
             c.lbl.width = w
             c.lbl.horizAlign = "center"
             if cur and i = sel then
-                c.edge.color = m.YELLOW
-                c.bg.color = m.YELLOW
-                c.lbl.color = "0x10244AFF"
+                c.bg.translation = [x, y]
+                c.bg.width = w
+                c.bg.blendColor = m.YELLOW
+                c.bg.visible = true
+                c.lbl.color = thm("0x10244AFF")
             else
-                c.edge.color = "0x34466BFF"
-                c.bg.color = "0x1B2B50FF"
-                c.lbl.color = "0xFFFFFFFF"
+                c.lbl.color = thm("0x9FB3DCFF")
             end if
-            x = x + w + 16
+            x = x + w + 6
         end if
     end for
 end sub
@@ -436,7 +458,7 @@ end sub
 sub drawSlot(slot as Object, row as Object, y as Integer, cur as Boolean)
     slot.label.translation = [m.X0 + 6, y]
     slot.label.text = row.label
-    if cur then slot.label.color = "0xFFFFFFFF" else slot.label.color = m.DIM
+    if cur then slot.label.color = thm("0xFFFFFFFF") else slot.label.color = m.DIM
     slot.label.visible = true
     w = m.TW
     if row.poster then w = m.PW
@@ -508,11 +530,12 @@ sub drawTile(n as Object, it as Object, x as Integer, y as Integer, w as Integer
 
     n.pic.visible = (pic <> "")
     if pic <> "" then
-        n.pic.translation = [x, y]
-        n.pic.width = w
-        n.pic.height = h
-        n.pic.loadWidth = w
-        n.pic.loadHeight = h
+        ' inset, so the tile's colour shows round it as a thin edge (as the web tiles)
+        n.pic.translation = [x + 3, y + 3]
+        n.pic.width = w - 6
+        n.pic.height = h - 6
+        n.pic.loadWidth = w - 6
+        n.pic.loadHeight = h - 6
         if n.pic.uri <> pic then n.pic.uri = pic
     end if
 
@@ -562,13 +585,13 @@ sub drawTile(n as Object, it as Object, x as Integer, y as Integer, w as Integer
         n.badge.width = bw
         n.badge.text = v.badge
         if v.live then
-            n.badgeBg.color = "0xE0263AFF"
-            n.badge.color = "0xFFFFFFFF"
+            n.badgeBg.color = thm("0xE0263AFF")
+            n.badge.color = thm("0xFFFFFFFF")
         else if v.dim then
-            n.badgeBg.color = "0x000000B8"
+            n.badgeBg.color = thm("0x000000B8")
             n.badge.color = m.DIM
         else
-            n.badgeBg.color = "0x000000B8"
+            n.badgeBg.color = thm("0x000000B8")
             n.badge.color = m.YELLOW
         end if
     end if
@@ -811,6 +834,41 @@ sub drawInfo()
     m.subLbl.text = plainText(sb)
     m.metaLbl.text = plainText(meta)
     m.descLbl.text = plainText(desc)
+    placeInfo()
+end sub
+
+' stack the details (title up to two lines, then the lines that have text), centred between the top bar and
+' the rows, as the web Home
+sub placeInfo()
+    parts = [m.titleLbl, m.subLbl, m.metaLbl, m.descLbl]
+    gaps = [0, 6, 4, 10]
+    hs = []
+    total = 0
+    for i = 0 to parts.Count() - 1
+        h = 0
+        if parts[i].text <> "" then
+            if i = 0 or i = 3 then
+                h = Int(parts[i].boundingRect().height)
+            else
+                h = Int(parts[i].height)
+            end if
+            if total > 0 then h = h + gaps[i]
+        end if
+        hs.Push(h)
+        total = total + h
+    end for
+    y = 88 + Int((m.Y0 - 100 - total) / 2)
+    if y < 84 then y = 84
+    started = false
+    for i = 0 to parts.Count() - 1
+        if hs[i] > 0 then
+            g = 0
+            if started then g = gaps[i]
+            parts[i].translation = [m.X0, y + g]
+            y = y + hs[i]
+            started = true
+        end if
+    end for
 end sub
 
 ' ============================================================ keys

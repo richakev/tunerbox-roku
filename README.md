@@ -40,20 +40,23 @@ TunerBox's `ideas/IMPROVEMENT-IDEAS.md` under "Roku app".
 Live: Up/Down channel; the button bar appears on every channel change (Left/Right move, OK selects);
 OK also opens it, FF opens the guide, Replay last channel,
 Play mute, * menu, Back exit prompt.
-Bar: Left/Right + OK (HOME GUIDE FAVS DVR SEARCH SPORTS ON DEMAND MENU LAST MUTE +FAV; HOME only when Home is on).
+Bar (top, as the web TV's): Left/Right + OK on Home, Guide, On Demand, Sports & Events, Search and More (Home only
+when Home is on). More has favorite on/off, Favorites, Last channel, Record this show, Mute, Show info and Menu.
 Guide: arrows move through programs/channels, REW/FF page, OK watch (now) or options (future),
 * menu, Back return to previous channel.
-Guide categories (as the web guide): Up on the first channel highlights the category picker; Left/Right cycles
-All / Movies / Sports / News / Kids, OK or Down goes back to the channels. Only channels with a show of that
-category on in the hours shown are listed, and other shows are dimmed. Also in the guide's * menu (Category),
-or C on a keyboard.
+Guide filters (pills above the grid, as the web guide): Up on the first channel moves onto them. Left/Right
+goes along Favorites / All / Movies / Sports / News / Kids; a category filters as soon as it's highlighted,
+and OK on Favorites switches between favorites only and every channel. OK or Down goes back to the channels.
+Only channels with a show of that category on in the hours shown are listed, and other shows are dimmed. Also
+in the guide's * menu (Category), or C on a keyboard.
 Keyboard: 0-9 jump, G guide, H Home, I info, L last, M mute, R record, / search, T sports, O On Demand.
 
 ## Home
-The same Home screen as the TunerBox web UI, fed by `/api/home`: live TV keeps playing in the corner with
-the highlighted tile's details beside it, then shortcuts (Watch TV, Guide, On Demand, Sports, Search, Menu)
-and rows for favorites on now, Continue Watching (On Demand and recordings), sports on now, recent channels,
-new recordings and what's coming up. It refreshes every minute.
+The same Home screen as the TunerBox web UI, fed by `/api/home`: a top bar with TunerBox, the shortcuts
+(Watch TV, Guide, On Demand, Sports & Events, Search, Menu) and the time; live TV keeps playing full screen behind it,
+darkened on the left and bottom, with the highlighted tile's details on the left, then rows for favorites on now, your teams on now, Continue Watching
+(On Demand and recordings), sports on now, recent channels, new recordings and what's coming up. Up from the
+first row goes to the shortcuts. It refreshes every minute.
 - Only there when TunerBox's Setup > Settings **Home screen** is on (read from `/api/settings` at each
   launch). Off: no HOME button, no Home in the menus, and the app starts on live TV.
 - Opens at launch; MENU > **Start on Home (this Roku)** turns that off for this Roku only.
@@ -62,6 +65,14 @@ new recordings and what's coming up. It refreshes every minute.
   Back goes to live TV. Screens opened from Home (guide, Sports, On Demand, Search) come back to it on Back.
 - Recordings play straight from TunerBox and resume where you stopped on any screen
   (Left -10s, Right +30s, Rew/FF 5 min, OK pause, Back stop).
+
+## Themes
+The same colour themes as the web TV screens: Midnight (the default), Classic Blue, Retro 90s and High Contrast.
+TunerBox's Setup > Settings > Screens > Theme sets the default (read from `/api/settings`; Light is for Setup and
+phones, so TV screens use Midnight with it). MENU > **Theme** picks one for this Roku only.
+The app's colours are written in the Classic Blue palette and `thm()` in `source/utils.brs` swaps each for the
+theme's; the maps there were made from the palettes at the end of TunerBox's `web/tv.css`, matched by role.
+If you add a colour, use one already in the app (or add it to the maps).
 
 ## Fast loading
 After the first successful load the channel list and guide are cached on the Roku. Next launch starts
@@ -92,11 +103,11 @@ video is not affected. Raise it if the edges of the guide are cut off on your TV
 - Not tested on hardware; the code passes the brighterscript linter only.
 - Streams use format `ts` unless the URL ends in .m3u8; MENU > Stream format overrides.
 
-## Sports & PPV
+## Sports & Events
 SPORTS (top bar, `T` on a keyboard, or the guide menu) opens the same panel as the TunerBox web UI, fed by `/api/sports`:
-- **On Now / Coming Up / Sports Channels / Events & PPV** tabs (Left/Right switches, Up/Down scrolls, Rew/FF page).
+- **On Now / Coming Up / Sports Channels / Events** tabs (Left/Right switches, Up/Down scrolls, Rew/FF page).
 - OK on something airing watches it (works even for channels hidden by "Hide unmapped"). OK on a future program offers **Record**, which now posts to `/api/recordings` (the guide's Record uses the same call).
-- Events & PPV: pick a group, optionally "Check which feeds are live now", then OK to watch a feed. Back returns to the group list, then closes.
+- Events: pick a group, optionally "Check which feeds are live now", then OK to watch a feed. Back returns to the group list, then closes.
 
 ## On Demand (movies & TV shows)
 ON DEMAND (top bar, `O` on a keyboard, or the guide's `*` menu) opens the same screen as the TunerBox web UI, fed by `/api/vod/*`:

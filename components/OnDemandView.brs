@@ -5,6 +5,7 @@
 ' This view talks to TunerBox /api/vod/* itself; the scene shows its dialogs and plays the video.
 
 sub init()
+    themeInit()
     m.PV = [40, 30, 560, 315]
     m.CAT_X = 40
     m.CAT_Y = 440
@@ -97,9 +98,9 @@ sub buildNodes()
     m.tabNodes = []
     for i = 0 to m.TABS.Count() - 1
         n = {}
-        n.bg = mkRect(0, 369, 10, 52, "0xFFC845FF")
-        n.lbl = mkLabel(0, 365, 0, 60, "", 28, true, "0xFFFFFFFF")
-        n.line = mkRect(0, 419, 10, 6, "0xFFC845FF")
+        n.bg = mkRect(0, 369, 10, 52, thm("0xFFC845FF"))
+        n.lbl = mkLabel(0, 365, 0, 60, "", 28, true, thm("0xFFFFFFFF"))
+        n.line = mkRect(0, 419, 10, 6, thm("0xFFC845FF"))
         m.tabsGroup.appendChild(n.bg)
         m.tabsGroup.appendChild(n.lbl)
         m.tabsGroup.appendChild(n.line)
@@ -110,9 +111,9 @@ sub buildNodes()
     for r = 0 to m.NCATS - 1
         y = m.CAT_Y + r * m.CAT_H
         n = {}
-        n.bg = mkRect(m.CAT_X, y, m.CAT_W, m.CAT_H - 4, "0x153A80FF")
-        n.name = mkLabel(m.CAT_X + 16, y, m.CAT_W - 120, m.CAT_H - 4, "", 26, true, "0xFFFFFFFF")
-        n.cnt = mkLabel(m.CAT_X + m.CAT_W - 110, y, 96, m.CAT_H - 4, "", 23, false, "0xCFE0FFFF")
+        n.bg = mkRect(m.CAT_X, y, m.CAT_W, m.CAT_H - 4, thm("0x153A80FF"))
+        n.name = mkLabel(m.CAT_X + 16, y, m.CAT_W - 120, m.CAT_H - 4, "", 26, true, thm("0xFFFFFFFF"))
+        n.cnt = mkLabel(m.CAT_X + m.CAT_W - 110, y, 96, m.CAT_H - 4, "", 23, false, thm("0xCFE0FFFF"))
         n.cnt.horizAlign = "right"
         for each k in ["bg", "name", "cnt"]
             n[k].visible = false
@@ -127,10 +128,10 @@ sub buildNodes()
             x = m.GX + c * (m.TW + m.GAP)
             y = m.GY + r * (m.TH + m.GAP)
             n = {}
-            n.ring = mkRect(x - 6, y - 6, m.TW + 12, m.TH + 12, "0xFFC845FF")
-            n.bg = mkRect(x, y, m.TW, m.TH, "0x1C3F86FF")
+            n.ring = mkRect(x - 6, y - 6, m.TW + 12, m.TH + 12, thm("0xFFC845FF"))
+            n.bg = mkRect(x, y, m.TW, m.TH, thm("0x1C3F86FF"))
             ' the name sits under the poster: it shows when there is no artwork
-            n.name = mkLabel(x + 10, y + 10, m.TW - 20, m.TH - 20, "", 25, true, "0xFFFFFFFF")
+            n.name = mkLabel(x + 10, y + 10, m.TW - 20, m.TH - 20, "", 25, true, thm("0xFFFFFFFF"))
             n.name.horizAlign = "center"
             n.name.wrap = true
             n.poster = CreateObject("roSGNode", "Poster")
@@ -140,11 +141,11 @@ sub buildNodes()
             n.poster.loadWidth = m.TW
             n.poster.loadHeight = m.TH
             n.poster.loadDisplayMode = "scaleToFill"
-            n.tagBg = mkRect(x, y, 70, 30, "0xE0243CFF")
-            n.tag = mkLabel(x, y, 70, 30, "", 19, true, "0xFFFFFFFF")
+            n.tagBg = mkRect(x, y, 70, 30, thm("0xE0243CFF"))
+            n.tag = mkLabel(x, y, 70, 30, "", 19, true, thm("0xFFFFFFFF"))
             n.tag.horizAlign = "center"
-            n.progBg = mkRect(x, y + m.TH - 10, m.TW, 10, "0x00000099")
-            n.progFill = mkRect(x, y + m.TH - 10, 0, 10, "0xFFC845FF")
+            n.progBg = mkRect(x, y + m.TH - 10, m.TW, 10, thm("0x00000099"))
+            n.progFill = mkRect(x, y + m.TH - 10, 0, 10, thm("0xFFC845FF"))
             for each k in ["ring", "bg", "name", "poster", "tagBg", "tag", "progBg", "progFill"]
                 n[k].visible = false
                 m.mainGroup.appendChild(n[k])
@@ -171,12 +172,12 @@ sub buildNodes()
     for r = 0 to m.NEPS - 1
         y = m.GY + r * m.EP_H
         n = {}
-        n.bg = mkRect(m.GX, y, 1410, m.EP_H - 4, "0x153A80FF")
-        n.num = mkLabel(m.GX + 16, y, 100, m.EP_H - 4, "", 26, true, "0xFFC845FF")
-        n.name = mkLabel(m.GX + 120, y, 960, m.EP_H - 4, "", 27, true, "0xFFFFFFFF")
-        n.right = mkLabel(m.GX + 1090, y, 300, m.EP_H - 4, "", 23, false, "0xCFE0FFFF")
+        n.bg = mkRect(m.GX, y, 1410, m.EP_H - 4, thm("0x153A80FF"))
+        n.num = mkLabel(m.GX + 16, y, 100, m.EP_H - 4, "", 26, true, thm("0xFFC845FF"))
+        n.name = mkLabel(m.GX + 120, y, 960, m.EP_H - 4, "", 27, true, thm("0xFFFFFFFF"))
+        n.right = mkLabel(m.GX + 1090, y, 300, m.EP_H - 4, "", 23, false, thm("0xCFE0FFFF"))
         n.right.horizAlign = "right"
-        n.prog = mkRect(m.GX, y + m.EP_H - 10, 0, 6, "0xFFC845FF")
+        n.prog = mkRect(m.GX, y + m.EP_H - 10, 0, 6, thm("0xFFC845FF"))
         for each k in ["bg", "num", "name", "right", "prog"]
             n[k].visible = false
             m.mainGroup.appendChild(n[k])
@@ -686,7 +687,7 @@ sub drawTabs()
                 n.lbl.translation = [x, 365]
                 n.lbl.width = 1400
                 n.lbl.text = plainText(anyStr(m.show.name)) + "    " + Chr(183) + "    Back: all " + LCase(kindName(anyStr(m.show.kind)))
-                n.lbl.color = "0xFFFFFFFF"
+                n.lbl.color = thm("0xFFFFFFFF")
             end if
         else
             x = drawTab(n, i, x)
@@ -712,7 +713,7 @@ function drawTab(n as Object, i as Integer, x as Integer) as Integer
         n.line.visible = (i = m.tab and not focused)
         n.line.translation = [x, 419]
         n.line.width = w + 36
-        if focused then n.lbl.color = "0x10244AFF" else n.lbl.color = "0xFFFFFFFF"
+        if focused then n.lbl.color = thm("0x10244AFF") else n.lbl.color = thm("0xFFFFFFFF")
         return x + w + 44
 end function
 
@@ -776,17 +777,17 @@ sub drawSideRow(n as Object, row as Object, isCur as Boolean, active as Boolean)
         n.name.text = plainText(row.name)
         n.cnt.text = row.cnt
         if isCur and active then
-            n.bg.color = "0xFFC845FF"
-            n.name.color = "0x10244AFF"
-            n.cnt.color = "0x10244AFF"
+            n.bg.color = thm("0xFFC845FF")
+            n.name.color = thm("0x10244AFF")
+            n.cnt.color = thm("0x10244AFF")
         else if isCur then
-            n.bg.color = "0x2F66C8FF"
-            n.name.color = "0xFFFFFFFF"
-            n.cnt.color = "0xCFE0FFFF"
+            n.bg.color = thm("0x2F66C8FF")
+            n.name.color = thm("0xFFFFFFFF")
+            n.cnt.color = thm("0xCFE0FFFF")
         else
-            n.bg.color = "0x153A80FF"
-            n.name.color = "0xFFFFFFFF"
-            n.cnt.color = "0xCFE0FFFF"
+            n.bg.color = thm("0x153A80FF")
+            n.name.color = thm("0xFFFFFFFF")
+            n.cnt.color = thm("0xCFE0FFFF")
         end if
 end sub
 
@@ -873,18 +874,18 @@ sub drawTile(tile as Object, t as Object, i as Integer)
         tile.poster.visible = (pu <> "")
         if tile.poster.uri <> pu then tile.poster.uri = pu
         tag = ""
-        tagC = "0xE0243CFF"
+        tagC = thm("0xE0243CFF")
         if t.kind = "episode" then
             tag = "EPISODE"
-            tagC = "0x3B5B96FF"
+            tagC = thm("0x3B5B96FF")
         else if isTrue(t.watched) then
             tag = "SEEN"
-            tagC = "0x1B6B2FFF"
+            tagC = thm("0x1B6B2FFF")
         else if isTrue(t["new"]) then
             tag = "NEW"
         else if m.tab >= 2 and t.kind = "series" then
             tag = "SHOW"
-            tagC = "0x3B5B96FF"
+            tagC = thm("0x3B5B96FF")
         end if
         tile.tag.visible = (tag <> "")
         tile.tagBg.visible = (tag <> "")
@@ -956,15 +957,15 @@ sub drawEpRow(n as Object, e as Object, isCur as Boolean, nx as String)
             n.prog.width = Int(1410 * p)
         end if
         if isCur and m.zone = "eps" then
-            n.bg.color = "0xFFC845FF"
-            n.name.color = "0x10244AFF"
-            n.num.color = "0x10244AFF"
-            n.right.color = "0x10244AFF"
+            n.bg.color = thm("0xFFC845FF")
+            n.name.color = thm("0x10244AFF")
+            n.num.color = thm("0x10244AFF")
+            n.right.color = thm("0x10244AFF")
         else
-            n.bg.color = "0x153A80FF"
-            n.name.color = "0xFFFFFFFF"
-            n.num.color = "0xFFC845FF"
-            n.right.color = "0xCFE0FFFF"
+            n.bg.color = thm("0x153A80FF")
+            n.name.color = thm("0xFFFFFFFF")
+            n.num.color = thm("0xFFC845FF")
+            n.right.color = thm("0xCFE0FFFF")
         end if
 end sub
 

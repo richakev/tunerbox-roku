@@ -7,6 +7,8 @@ sub Main(args as Dynamic)
     screen = CreateObject("roSGScreen")
     port = CreateObject("roMessagePort")
     screen.SetMessagePort(port)
+    ' the colour theme, before any screen draws (see themeChosen in utils.brs)
+    screen.getGlobalNode().addFields({ theme: themeChosen() })
     scene = screen.CreateScene("MainScene")
     screen.Show()
 

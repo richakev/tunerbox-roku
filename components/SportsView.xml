@@ -23,7 +23,7 @@
     <Rectangle translation="[30,1053]" width="1860" height="3" color="0x4F86E8FF" />
     <Rectangle translation="[30,24]" width="3" height="1032" color="0x4F86E8FF" />
     <Rectangle translation="[1887,24]" width="3" height="1032" color="0x4F86E8FF" />
-    <Label id="titleLbl" translation="[60,32]" width="800" height="62" vertAlign="center" text="Sports &amp; PPV" color="0xFFFFFFFF" font="font:LargeBoldSystemFont" />
+    <Label id="titleLbl" translation="[60,32]" width="800" height="62" vertAlign="center" text="Sports &amp; Events" color="0xFFFFFFFF" font="font:LargeBoldSystemFont" />
     <Group id="tabsGroup" />
     <Label id="statusLbl" translation="[60,154]" width="1780" height="36" vertAlign="center" color="0xAFC8F5FF" font="font:SmallSystemFont" />
     <Group id="rowsGroup" />

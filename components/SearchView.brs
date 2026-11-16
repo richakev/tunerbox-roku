@@ -3,6 +3,7 @@
 ' The scene does the matching (it owns the channel list) and handles watch / record.
 
 sub init()
+    themeInit()
     m.KX = 60
     m.KY = 222
     m.KW = 76
@@ -167,9 +168,9 @@ end sub
 sub render()
     m.queryLbl.text = m.q + "_"
     if m.focus = "keys" then
-        m.boxBorder.color = "0xFFC845FF"
+        m.boxBorder.color = thm("0xFFC845FF")
     else
-        m.boxBorder.color = "0x4F86E8FF"
+        m.boxBorder.color = thm("0x4F86E8FF")
     end if
     drawKeys()
     drawRows()
@@ -189,11 +190,11 @@ sub drawKeys()
         y = m.KY + k.row * (m.KH + m.KGAP)
         w = k.span * m.KW + (k.span - 1) * m.KGAP
         if i = cur and m.focus = "keys" then
-            bg = "0xFFC845FF"
-            tc = "0x10244AFF"
+            bg = thm("0xFFC845FF")
+            tc = thm("0x10244AFF")
         else
-            bg = "0x2052B8FF"
-            tc = "0xFFFFFFFF"
+            bg = thm("0x2052B8FF")
+            tc = thm("0xFFFFFFFF")
         end if
         m.keysGroup.appendChild(mkRect(x, y, w, m.KH, bg))
         l = mkLabel(x, y, w, m.KH, k.t, 30, true, tc)
@@ -252,12 +253,12 @@ function sv(v as Dynamic) as String
 end function
 
 function feedBadge(f as Object) as Object
-    if f.status = "ok" then return { t: "LIVE", c: "0xE0243CFF" }
-    if f.ended = true then return { t: "ENDED", c: "0x4A5568FF" }
-    if f.slot = true then return { t: "EMPTY", c: "0x4A5568FF" }
-    if f.status = "dead" then return { t: "OFF AIR", c: "0x4A5568FF" }
-    if f.kind = "ppv" then return { t: "PPV", c: "0x7A3FB5FF" }
-    return { t: "EVENT", c: "0x3B5B96FF" }
+    if f.status = "ok" then return { t: "LIVE", c: thm("0xE0243CFF") }
+    if f.ended = true then return { t: "ENDED", c: thm("0x4A5568FF") }
+    if f.slot = true then return { t: "EMPTY", c: thm("0x4A5568FF") }
+    if f.status = "dead" then return { t: "OFF AIR", c: thm("0x4A5568FF") }
+    if f.kind = "ppv" then return { t: "PPV", c: thm("0x7A3FB5FF") }
+    return { t: "EVENT", c: thm("0x3B5B96FF") }
 end function
 
 sub drawRow(it as Object, r as Integer, selected as Boolean)
@@ -265,18 +266,18 @@ sub drawRow(it as Object, r as Integer, selected as Boolean)
     h = m.ROW_H - 6
     x0 = m.ROW_X
     if selected then
-        m.rowsGroup.appendChild(mkRect(x0, y, m.ROW_W, h, "0xFFC845FF"))
-        tc = "0x111111FF"
-        nc = "0x111111FF"
-        rc = "0x222222FF"
-        sc = "0x34415FFF"
-        bb = "0x2052B8FF"
+        m.rowsGroup.appendChild(mkRect(x0, y, m.ROW_W, h, thm("0xFFC845FF")))
+        tc = thm("0x111111FF")
+        nc = thm("0x111111FF")
+        rc = thm("0x222222FF")
+        sc = thm("0x34415FFF")
+        bb = thm("0x2052B8FF")
     else
-        tc = "0xFFFFFFFF"
-        nc = "0xFFC845FF"
-        rc = "0xAFC8F5FF"
-        sc = "0xA9BEE8FF"
-        bb = "0x2F5FC0FF"
+        tc = thm("0xFFFFFFFF")
+        nc = thm("0xFFC845FF")
+        rc = thm("0xAFC8F5FF")
+        sc = thm("0xA9BEE8FF")
+        bb = thm("0x2F5FC0FF")
     end if
     tx = x0 + 24
     rw = 400
@@ -292,21 +293,21 @@ sub drawRow(it as Object, r as Integer, selected as Boolean)
         bg = b.c
     else if it.k = "vod" then
         badge = it.badge
-        bg = "0x7A3FB5FF"
-        if badge <> "MOVIE" then bg = "0x006B6BFF"
+        bg = thm("0x7A3FB5FF")
+        if badge <> "MOVIE" then bg = thm("0x006B6BFF")
     else
         badge = whenText(it.start)
-        bg = "0x3B4F78FF"
+        bg = thm("0x3B4F78FF")
         if badge = "Now" then
             badge = "ON NOW"
-            bg = "0x1B6B2FFF"
+            bg = thm("0x1B6B2FFF")
         end if
         right = it.num + " " + sv(it.name)
     end if
     bw = Len(badge) * 13 + 28
     if bw < 60 then bw = 60
     m.rowsGroup.appendChild(mkRect(tx, y + 16, bw, h - 32, bg))
-    bl = mkLabel(tx, y + 16, bw, h - 32, badge, 22, false, "0xFFFFFFFF")
+    bl = mkLabel(tx, y + 16, bw, h - 32, badge, 22, false, thm("0xFFFFFFFF"))
     bl.horizAlign = "center"
     m.rowsGroup.appendChild(bl)
     tx = tx + bw + 20

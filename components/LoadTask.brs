@@ -130,7 +130,7 @@ function readGuideCache() as Object
     return g
 end function
 
-' ============================================================ Sports & PPV, DVR (TunerBox /api/sports, /api/recordings)
+' ============================================================ Sports & Events, DVR (TunerBox /api/sports, /api/recordings)
 function getObj(path as String, timeoutMs as Integer) as Object
     txt = fetchText(m.top.baseUrl + path, timeoutMs)
     if txt = "" then return invalid
@@ -351,8 +351,8 @@ function jsStr(v as Dynamic) as String
     if v = invalid then return ""
     t = Type(v)
     if t = "String" or t = "roString" then return v
-    if t = "Integer" or t = "roInt" or t = "Float" or t = "roFloat" or t = "Double" or t = "LongInteger" then return Str(v).Trim()
-    return ""
+    ' anyStr keeps every digit (Str() writes big numbers such as start times as "1.794834e+09")
+    return anyStr(v)
 end function
 
 ' lower-case, punctuation -> spaces, padded so " word " tests whole words

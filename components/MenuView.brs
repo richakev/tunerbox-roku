@@ -2,6 +2,7 @@
 ' items = [{ id, label, value }]; value (optional) is shown on the right of the tile.
 
 sub init()
+    themeInit()
     m.panel = m.top.findNode("panel")
     m.sel = 0
     m.COLS = 2
@@ -39,12 +40,12 @@ sub render()
     if py < 0 then py = 0
     m.panel.translation = [Int((1920 - w) / 2), py]
 
-    m.panel.appendChild(mkRect(0, 0, w, h, "0x0B2A6AF8"))
-    m.panel.appendChild(mkRect(0, 0, w, 4, "0xFFC845FF"))
-    m.panel.appendChild(mkLabel(40, 18, w - 80, 62, m.top.heading, 52, true, "0xFFFFFFFF"))
-    sl = mkLabel(40, 82, w - 80, 38, m.top.subtitle, 28, false, "0xAFC8F5FF")
+    m.panel.appendChild(mkRect(0, 0, w, h, thm("0x0B2A6AF8")))
+    m.panel.appendChild(mkRect(0, 0, w, 4, thm("0xFFC845FF")))
+    m.panel.appendChild(mkLabel(40, 18, w - 80, 62, m.top.heading, 52, true, thm("0xFFFFFFFF")))
+    sl = mkLabel(40, 82, w - 80, 38, m.top.subtitle, 28, false, thm("0xAFC8F5FF"))
     m.panel.appendChild(sl)
-    m.panel.appendChild(mkRect(40, 130, w - 80, 2, "0x3B5B96FF"))
+    m.panel.appendChild(mkRect(40, 130, w - 80, 2, thm("0x3B5B96FF")))
 
     for i = 0 to n - 1
         it = items[i]
@@ -53,13 +54,13 @@ sub render()
         x = 40 + col * (m.TW + m.GAP)
         y = 156 + row * (m.TH + m.GAP)
         if i = m.sel then
-            bg = "0xFFC845FF"
-            tc = "0x10244AFF"
-            vc = "0x5A3F00FF"
+            bg = thm("0xFFC845FF")
+            tc = thm("0x10244AFF")
+            vc = thm("0x5A3F00FF")
         else
-            bg = "0x1E56B3FF"
-            tc = "0xFFFFFFFF"
-            vc = "0xFFD98AFF"
+            bg = thm("0x1E56B3FF")
+            tc = thm("0xFFFFFFFF")
+            vc = thm("0xFFD98AFF")
         end if
         m.panel.appendChild(mkRect(x, y, m.TW, m.TH, bg))
         if it.value <> invalid and it.value <> "" then
@@ -72,7 +73,7 @@ sub render()
         end if
     end for
 
-    m.panel.appendChild(mkLabel(40, h - 58, w - 80, 40, "Arrows  Move      OK  Select      Back  Close", 26, false, "0xC5D3EFFF"))
+    m.panel.appendChild(mkLabel(40, h - 58, w - 80, 40, "Arrows  Move      OK  Select      Back  Close", 26, false, thm("0xC5D3EFFF")))
 end sub
 
 sub moveSel(dc as Integer, dr as Integer)

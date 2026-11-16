@@ -3,7 +3,7 @@
   <script type="text/brightscript" uri="pkg:/components/LoadTask.brs" />
   <script type="text/brightscript" uri="pkg:/source/utils.brs" />
   <interface>
-    <!-- "search" = GET /api/search; "sports" / "sgroup" / "scheck" / "scheckstate" / "record" = Sports & PPV + DVR; "espn" = ESPN scoreboards matched to the guide; "favs" = GET favorites, "setfav" = POST favorite; "boot" = channel list (cache -> sidecar -> M3U); "guide" = programme guide (background) -->
+    <!-- "search" = GET /api/search; "sports" / "sgroup" / "scheck" / "scheckstate" / "record" = Sports & Events + DVR; "espn" = ESPN scoreboards matched to the guide; "favs" = GET favorites, "setfav" = POST favorite; "boot" = channel list (cache -> sidecar -> M3U); "guide" = programme guide (background) -->
     <field id="mode" type="string" value="boot" />
     <field id="baseUrl" type="string" />
     <field id="useCache" type="boolean" value="true" />
