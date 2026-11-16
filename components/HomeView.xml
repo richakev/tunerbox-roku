@@ -11,6 +11,9 @@
     <field id="request" type="assocarray" alwaysNotify="true" />
     <!-- where the live-TV preview sits, in this view's own coordinates [x, y, w, h] -->
     <field id="previewRect" type="array" />
+    <!-- overscan insets in screen pixels [left, top, right, bottom]: the scene moves this view to the safe
+         area's corner at full size (not shrunk, so text and pictures stay sharp) and it lays out inside them -->
+    <field id="safe" type="array" onChange="onSafe" />
     <function name="openHome" />
     <function name="closeHome" />
     <function name="reload" />

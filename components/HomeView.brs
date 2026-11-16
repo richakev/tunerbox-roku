@@ -62,7 +62,8 @@ sub init()
     m.brand2Lbl.translation = [m.X0 + m.brandLbl.boundingRect().width, 20]
     m.NAV_X = m.X0 + m.brandLbl.boundingRect().width + m.brand2Lbl.boundingRect().width + 40
     m.msgLbl.font.size = 32
-    buildKeyHints(m.hintsGroup, [["OK", "Watch / Open"], ["ARROWS", "Move"], ["*", "Favorite"], ["REW/FF", "Start / end of row"], ["BACK", "Live TV"]], 36, 1840)
+    m.HINTS = [["OK", "Watch / Open"], ["ARROWS", "Move"], ["*", "Favorite"], ["REW/FF", "Start / end of row"], ["BACK", "Live TV"]]
+    buildKeyHints(m.hintsGroup, m.HINTS, 36, m.W)
 
     m.rows = []
     m.r = 0
@@ -74,6 +75,21 @@ sub init()
     m.tasks = []
     m.bad = {}
     buildNodes()
+end sub
+
+' fit inside the overscan insets: narrower rows, the bottom (key hints, last row) moved up
+sub onSafe()
+    sf = m.top.safe
+    if sf = invalid or sf.Count() < 4 then return
+    m.W = 1840 - sf[0] - sf[2]
+    m.YMAX = 1016 - sf[1] - sf[3]
+    m.rowsGroup.clippingRect = [-200, -200, 2320, m.YMAX + 200 - 4]
+    m.hintsGroup.translation = [m.X0, m.YMAX + 12]
+    buildKeyHints(m.hintsGroup, m.HINTS, 36, m.W)
+    if m.top.visible then
+        drawClock()
+        render()
+    end if
 end sub
 
 ' colours kept for drawing; again on each open, in case the theme changed

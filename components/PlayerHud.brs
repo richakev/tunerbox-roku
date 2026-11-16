@@ -31,9 +31,19 @@ sub init()
     m.clockLbl.font.size = 46
     m.dateLbl.font.size = 26
 
+    m.inX = 0               ' left + right insets: the right-hand things move in by this much
     m.barActive = false
     m.focusIdx = 0
     buildBar()
+end sub
+
+sub onSafe()
+    sf = m.top.safe
+    if sf = invalid or sf.Count() < 4 then return
+    m.inX = sf[0] + sf[2]
+    m.banner.translation = [0, 840 - sf[1] - sf[3]]
+    m.clockLbl.translation = [1480 - m.inX, 62]
+    m.dateLbl.translation = [1480 - m.inX, 122]
 end sub
 
 sub onShowHome()
@@ -206,7 +216,7 @@ sub fillBanner(info as Object)
     end if
 
     ' natural width, truncated before it reaches the clock (leaves room for the rating badge)
-    maxW = 1440 - x
+    maxW = 1440 - m.inX - x
     if info.rating <> "" then maxW = maxW - 110
     m.titleLbl.translation = [x, 60]
     m.titleLbl.width = 0
@@ -227,9 +237,10 @@ sub fillBanner(info as Object)
     end for
     ' the channel name is in its logo; without one, it leads the details
     m.subLbl.translation = [x, 120]
-    m.subLbl.width = 1460 - x
+    m.subLbl.width = 1460 - m.inX - x
     m.subLbl.text = parts.Join(sep)
     m.nextLbl.translation = [x, 186]
+    m.nextLbl.width = 1760 - m.inX - x
     m.nextLbl.text = hint
 
     hasTimes = (info.times <> "")

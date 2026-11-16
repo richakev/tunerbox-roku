@@ -1730,9 +1730,17 @@ sub applyScreenFit()
     pct = Val(regRead("fit", "2.5")) / 100.0
     m.fitScale = 1.0 - 2.0 * pct
     m.fitOff = [Int(1920 * pct + 0.5), Int(1080 * pct + 0.5)]
-    for each n in [m.hud, m.sports, m.search, m.od, m.home, m.menu, m.statusGroup, m.toast]
+    for each n in [m.sports, m.search, m.od, m.menu, m.statusGroup, m.toast]
         n.scale = [m.fitScale, m.fitScale]
         n.translation = m.fitOff
+    end for
+    ' Home and the live-TV bar / banner move into the safe area at full size and lay out inside it, so their
+    ' text and pictures stay sharp (shrinking them blurs both)
+    ins = [m.fitOff[0], m.fitOff[1], m.fitOff[0], m.fitOff[1]]
+    for each n in [m.home, m.hud]
+        n.scale = [1.0, 1.0]
+        n.translation = m.fitOff
+        n.safe = ins
     end for
     ' the guide re-flows into the safe area at full size instead of being shrunk
     m.guide.safe = [m.fitOff[0], m.fitOff[1], m.fitOff[0], m.fitOff[1]]
@@ -2013,7 +2021,9 @@ sub runMenuAction(action as String)
     else if action = "stats" then
         if m.playIdx >= 0 then showStreamStats()
     else if action = "about" then
-        showDialog("info", "About", ["TunerBox TV 1.0", "Server: " + m.base, "Channels: " + m.channels.Count().ToStr() + "   With guide data: " + m.epgCount.ToStr()], ["OK"], ["close"])
+        ' the manifest's version (major.minor.build), so it's easy to see which build is installed
+        appInfo = CreateObject("roAppInfo")
+        showDialog("info", "About", ["TunerBox TV " + appInfo.GetVersion(), "Server: " + m.base, "Channels: " + m.channels.Count().ToStr() + "   With guide data: " + m.epgCount.ToStr()], ["OK"], ["close"])
     end if
 end sub
 
