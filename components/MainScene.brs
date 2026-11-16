@@ -576,13 +576,13 @@ sub playChannel(idx as Integer)
 end sub
 
 ' 720p compatibility mode: applies to ALL channels (default ON, toggle in MENU)
-function isCompat(numStr as String) as Boolean
+function isCompat() as Boolean
     return regRead("compat720", "1") = "1"
 end function
 
 function streamUrl(ch as Object) as String
     u = ch.url
-    if isCompat(ch.numStr) then
+    if isCompat() then
         sep = "?"
         if Instr(1, u, "?") > 0 then sep = "&"
         u = u + sep + "mode=roku720"
@@ -591,7 +591,7 @@ function streamUrl(ch as Object) as String
 end function
 
 sub toggleCompat()
-    if isCompat("") then
+    if isCompat() then
         regWrite("compat720", "0")
         showToast("720p mode OFF (original quality)")
     else
@@ -1002,7 +1002,6 @@ sub onGuideTune()
 end sub
 
 sub onGuidePreview()
-    idx = m.guide.previewRequest
     ' preview stays on the current channel while browsing the guide (no retune)
 end sub
 
@@ -1285,7 +1284,7 @@ end sub
 sub playExternal(ex as Object)
     m.extern = ex
     u = ex.url
-    if isCompat("") then
+    if isCompat() then
         sep = "?"
         if Instr(1, u, "?") > 0 then sep = "&"
         u = u + sep + "mode=roku720"
@@ -1699,7 +1698,7 @@ function hideLabel() as String
 end function
 
 function compatLabel() as String
-    if isCompat("") then return "ON"
+    if isCompat() then return "ON"
     return "OFF"
 end function
 
@@ -2194,7 +2193,7 @@ sub vodStart(at as Float)
     v.acc = 0.0
     v.running = false
     u = m.base + "/api/vod/stream/" + urlEncode(v.id) + "?ss=" + Int(at).ToStr() + "&client=" + urlEncode(vodClientId())
-    if isCompat("") then u = u + "&mode=roku720"
+    if isCompat() then u = u + "&mode=roku720"
     c = CreateObject("roSGNode", "ContentNode")
     c.url = u
     c.title = anyStr(v.it.title)

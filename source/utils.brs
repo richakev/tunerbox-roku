@@ -242,9 +242,25 @@ function thm(c as String) as String
         m.thmMap = themeMap(name)
         m.thmName = name
     end if
-    v = m.thmMap[c]
+    v = themeLookup(m.thmMap, c)
     if v = invalid then return c
     return v
+end function
+
+' a colour in a theme map; one that's only there with another transparency (e.g. 0x08163AF7 when the map has
+' 0x08163AFF) uses that entry's colour, scaled to its own transparency. invalid when the colour isn't mapped.
+function themeLookup(mp as Object, c as String) as Dynamic
+    v = mp[c]
+    if v <> invalid then return v
+    if Len(c) <> 10 then return invalid
+    e = mp["rgb:" + LCase(Left(c, 8))]
+    if e = invalid then return invalid
+    ka = Val(Right(e.k, 2), 16)
+    if ka = 0 then return invalid
+    a = Int(Val(Right(c, 2), 16) * Val(Right(e.v, 2), 16) / ka + 0.5)
+    if a > 255 then a = 255
+    hx = "0123456789ABCDEF"
+    return Left(e.v, 8) + Mid(hx, (a \ 16) + 1, 1) + Mid(hx, (a mod 16) + 1, 1)
 end function
 
 ' { "0xCLASSIC": "0xTHEMED" } (case doesn't matter: the keys are looked up case-insensitively)
@@ -283,7 +299,12 @@ function themeMap(name as String) as Object
     mp = {}
     for each pair in s.Split(",")
         kv = pair.Split("=")
-        if kv.Count() = 2 then mp["0x" + kv[0]] = "0x" + kv[1]
+        if kv.Count() = 2 then
+            k = "0x" + kv[0]
+            mp[k] = "0x" + kv[1]
+            rk = "rgb:" + LCase(Left(k, 8))
+            if mp[rk] = invalid then mp[rk] = { k: k, v: "0x" + kv[1] }
+        end if
     end for
     return mp
 end function
@@ -303,8 +324,12 @@ end function
 function themeReverse(mp as Object) as Object
     out = {}
     for each k in mp
+        if Left(LCase(k), 4) = "rgb:" then continue for
         v = "0x" + UCase(Mid(mp[k], 3))
-        if out[v] = invalid then out[v] = "0x" + UCase(Mid(k, 3))
+        o = "0x" + UCase(Mid(k, 3))
+        if out[v] = invalid then out[v] = o
+        rk = "rgb:" + LCase(Left(v, 8))
+        if out[rk] = invalid then out[rk] = { k: v, v: o }
     end for
     return out
 end function
@@ -315,9 +340,9 @@ sub themeWalk(node as Object, back as Object, fwd as Object, deep as Boolean)
     if node = invalid then return
     if node.hasField("color") then
         c = colorHex(node.color)
-        o = back[c]
+        o = themeLookup(back, c)
         if o = invalid then o = c
-        v = fwd[o]
+        v = themeLookup(fwd, o)
         if v <> invalid then
             node.color = v
         else if o <> c then
@@ -326,9 +351,9 @@ sub themeWalk(node as Object, back as Object, fwd as Object, deep as Boolean)
     else if node.subtype() = "Poster" then
         ' tinted pills, rounded boxes and fades (other pictures keep their white tint, which no theme maps)
         c = colorHex(node.blendColor)
-        o = back[c]
+        o = themeLookup(back, c)
         if o = invalid then o = c
-        v = fwd[o]
+        v = themeLookup(fwd, o)
         if v <> invalid then
             node.blendColor = v
         else if o <> c then
