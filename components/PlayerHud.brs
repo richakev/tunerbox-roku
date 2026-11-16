@@ -33,14 +33,26 @@ sub init()
 
     m.barActive = false
     m.focusIdx = 0
-    m.ids = ["guide", "favs", "dvr", "search", "sports", "ondemand", "menu", "last", "mute", "fav"]
-    m.labels = ["GUIDE", "FAVS", "DVR", "SEARCH", "SPORTS", "ON DEMAND", "MENU", "LAST", "MUTE", "+ FAV"]
-    m.btnRect = []
-    m.btnText = []
+    buildBar()
+end sub
+
+sub onShowHome()
+    m.focusIdx = 0
     buildBar()
 end sub
 
 sub buildBar()
+    m.ids = ["guide", "favs", "dvr", "search", "sports", "ondemand", "menu", "last", "mute", "fav"]
+    m.labels = ["GUIDE", "FAVS", "DVR", "SEARCH", "SPORTS", "ON DEMAND", "MENU", "LAST", "MUTE", "+ FAV"]
+    if m.top.showHome then
+        m.ids.Unshift("home")
+        m.labels.Unshift("HOME")
+    end if
+    m.btnRect = []
+    m.btnText = []
+    while m.bar.getChildCount() > 0
+        m.bar.removeChildIndex(0)
+    end while
     pad = 22
     gap = 8
     h = 62
@@ -67,6 +79,8 @@ sub buildBar()
         x = x + widths[i] + gap
     end for
     setFocusIdx(m.focusIdx)
+    onMuted()
+    onFav()
 end sub
 
 sub setFocusIdx(i as Integer)

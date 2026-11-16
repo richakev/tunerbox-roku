@@ -22,6 +22,8 @@
     <!-- "api" = GET apiPath (or POST apiBody when set); apiTag / apiCtx come back in result -->
     <field id="apiPath" type="string" />
     <field id="apiBody" type="string" />
+    <!-- "DELETE" sends a DELETE to apiPath instead -->
+    <field id="apiMethod" type="string" />
     <field id="apiTag" type="string" />
     <field id="apiCtx" type="assocarray" />
     <field id="favOn" type="boolean" value="true" />

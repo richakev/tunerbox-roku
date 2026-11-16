@@ -40,10 +40,28 @@ TunerBox's `ideas/IMPROVEMENT-IDEAS.md` under "Roku app".
 Live: Up/Down channel; the button bar appears on every channel change (Left/Right move, OK selects);
 OK also opens it, FF opens the guide, Replay last channel,
 Play mute, * menu, Back exit prompt.
-Bar: Left/Right + OK (GUIDE FAVS DVR SEARCH SPORTS ON DEMAND MENU LAST MUTE +FAV).
+Bar: Left/Right + OK (HOME GUIDE FAVS DVR SEARCH SPORTS ON DEMAND MENU LAST MUTE +FAV; HOME only when Home is on).
 Guide: arrows move through programs/channels, REW/FF page, OK watch (now) or options (future),
 * menu, Back return to previous channel.
-Keyboard: 0-9 jump, G guide, I info, L last, M mute, R record, / search, T sports, O On Demand.
+Guide categories (as the web guide): Up on the first channel highlights the category picker; Left/Right cycles
+All / Movies / Sports / News / Kids, OK or Down goes back to the channels. Only channels with a show of that
+category on in the hours shown are listed, and other shows are dimmed. Also in the guide's * menu (Category),
+or C on a keyboard.
+Keyboard: 0-9 jump, G guide, H Home, I info, L last, M mute, R record, / search, T sports, O On Demand.
+
+## Home
+The same Home screen as the TunerBox web UI, fed by `/api/home`: live TV keeps playing in the corner with
+the highlighted tile's details beside it, then shortcuts (Watch TV, Guide, On Demand, Sports, Search, Menu)
+and rows for favorites on now, Continue Watching (On Demand and recordings), sports on now, recent channels,
+new recordings and what's coming up. It refreshes every minute.
+- Only there when TunerBox's Setup > Settings **Home screen** is on (read from `/api/settings` at each
+  launch). Off: no HOME button, no Home in the menus, and the app starts on live TV.
+- Opens at launch; MENU > **Start on Home (this Roku)** turns that off for this Roku only.
+- Open it with HOME on the button bar, MENU > Home, the guide's `*` menu, or `H` on a keyboard.
+- Arrows move, OK watches / opens, `*` adds or removes a favorite, Rew/FF jump to the start / end of a row,
+  Back goes to live TV. Screens opened from Home (guide, Sports, On Demand, Search) come back to it on Back.
+- Recordings play straight from TunerBox and resume where you stopped on any screen
+  (Left -10s, Right +30s, Rew/FF 5 min, OK pause, Back stop).
 
 ## Fast loading
 After the first successful load the channel list and guide are cached on the Roku. Next launch starts

@@ -294,7 +294,6 @@ function fetchMany(urls as Object, timeoutMs as Integer) as Object
         x.SetUrl(urls[i])
         x.EnableEncodings(true)
         x.SetCertificatesFile("common:/certs/ca-bundle.crt")
-        x.InitClientCertificates()
         x.AddHeader("Accept", "application/json")
         if x.AsyncGetToString() then xfers[x.GetIdentity().ToStr()] = { x: x, i: i }
     end for
@@ -632,7 +631,9 @@ end sub
 sub callApi()
     result = { ok: false, data: invalid, tag: m.top.apiTag, ctx: m.top.apiCtx }
     url = m.top.baseUrl + m.top.apiPath
-    if m.top.apiBody <> "" then
+    if m.top.apiMethod = "DELETE" then
+        txt = deleteText(url, 15000)
+    else if m.top.apiBody <> "" then
         txt = postText(url, m.top.apiBody, 15000)
     else
         txt = fetchText(url, 30000)
@@ -650,15 +651,41 @@ end sub
 ' ============================================================ favorites (TunerBox /api/favorites)
 sub loadFavs()
     result = { ok: false, favs: [] }
-    txt = fetchText(m.top.baseUrl + "/api/favorites", 8000)
+    url = m.top.baseUrl + "/api/favorites"
+    why = ""
+    txt = ""
+    xfer = CreateObject("roUrlTransfer")
+    port = CreateObject("roMessagePort")
+    xfer.SetPort(port)
+    xfer.SetUrl(url)
+    if xfer.AsyncGetToString() then
+        msg = Wait(8000, port)
+        if Type(msg) = "roUrlEvent" then
+            code = msg.GetResponseCode()
+            if code = 200 then
+                txt = msg.GetString()
+            else
+                why = "HTTP " + code.ToStr() + " " + msg.GetFailureReason()
+            end if
+        else
+            xfer.AsyncCancel()
+            why = "no answer in 8 s"
+        end if
+    else
+        why = "request not started"
+    end if
     if txt <> "" then
         arr = ParseJson(txt)
         if arr <> invalid and Type(arr) = "roArray" then
             result.favs = arr
             result.ok = true
+        else
+            why = "not a JSON list: " + Left(txt, 80)
         end if
     end if
-    print "[TunerBox] favorites: ok=" + result.ok.ToStr() + " count=" + result.favs.Count().ToStr()
+    line = "[TunerBox] favorites: ok=" + result.ok.ToStr() + " count=" + result.favs.Count().ToStr()
+    if not result.ok then line = line + " (" + url + ": " + why + ")"
+    print line
     m.top.result = result
 end sub
 
@@ -688,6 +715,28 @@ function postText(url as String, body as String, timeoutMs as Integer) as String
         if Type(msg) = "roUrlEvent" then
             code = msg.GetResponseCode()
             if code >= 200 and code < 300 then return msg.GetString()
+        else
+            xfer.AsyncCancel()
+        end if
+    end if
+    return ""
+end function
+
+function deleteText(url as String, timeoutMs as Integer) as String
+    xfer = CreateObject("roUrlTransfer")
+    port = CreateObject("roMessagePort")
+    xfer.SetPort(port)
+    xfer.SetUrl(url)
+    xfer.SetRequest("DELETE")
+    if xfer.AsyncGetToString() then
+        msg = Wait(timeoutMs, port)
+        if Type(msg) = "roUrlEvent" then
+            code = msg.GetResponseCode()
+            if code >= 200 and code < 300 then
+                txt = msg.GetString()
+                if txt = "" then txt = "{}"
+                return txt
+            end if
         else
             xfer.AsyncCancel()
         end if
@@ -1020,7 +1069,6 @@ function fetchText(url as String, timeoutMs as Integer) as String
     xfer.EnableEncodings(true)
     if LCase(Left(url, 6)) = "https:" then
         xfer.SetCertificatesFile("common:/certs/ca-bundle.crt")
-        xfer.InitClientCertificates()
     end if
     if xfer.AsyncGetToString() then
         msg = Wait(timeoutMs, port)

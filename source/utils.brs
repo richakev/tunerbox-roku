@@ -139,6 +139,13 @@ function numv(v as Dynamic) as Float
     return 0
 end function
 
+' JSON true / non-zero number (TunerBox sends some flags as 0/1) -> true; anything else -> false
+function truthy(v as Dynamic) as Boolean
+    if v = invalid then return false
+    if GetInterface(v, "ifBoolean") <> invalid then return v
+    return numv(v) <> 0
+end function
+
 ' 105 min -> "1h 45m"
 function fmtLen(secs as Float) as String
     mins = Int(secs / 60 + 0.5)

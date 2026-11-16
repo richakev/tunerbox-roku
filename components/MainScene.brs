@@ -1,5 +1,5 @@
 ' TunerBox TV - scene controller
-' modes: boot | needhost | error | live | guide | sports | search | ondemand | vod
+' modes: boot | needhost | error | live | home | guide | sports | search | ondemand | vod | rec
 
 sub init()
     m.video = m.top.findNode("video")
@@ -18,6 +18,14 @@ sub init()
     m.sports = m.top.findNode("sports")
     m.search = m.top.findNode("search")
     m.od = m.top.findNode("od")
+    m.home = m.top.findNode("home")
+    ' Home screen: only when TunerBox's Setup > Settings "Home screen" is on (last answer cached for the next launch)
+    m.homeOn = (regRead("homeOn", "0") = "1")
+    m.homeAuto = true       ' still launching: open on Home once we know it's on (until a key is pressed)
+    m.returnHome = false    ' the screen on top was opened from Home: Back goes back there
+    m.homeReq = invalid
+    m.rec = invalid
+    m.homeTasks = []
     m.vod = invalid
     m.vodSeq = 0
     m.vodTasks = []
@@ -58,6 +66,11 @@ sub init()
     m.underruns = 0
     m.favs = {}
     m.favTasks = []
+    ' a favorites load that failed is tried again a few times, spaced out (not straight away, in a loop)
+    m.favRetries = 0
+    m.favRetryTimer = CreateObject("roSGNode", "Timer")
+    m.favRetryTimer.repeat = false
+    m.favRetryTimer.observeField("fire", "onFavRetry")
     m.guideTitle = ""
     m.useCache = true
     m.fromCache = false
@@ -70,11 +83,13 @@ sub init()
     m.guide.observeField("optionsRequest", "onGuideOptions")
     m.guide.observeField("menuRequest", "onGuideMenu")
     m.guide.observeField("exitRequest", "onGuideExit")
+    m.guide.observeField("notice", "onGuideNotice")
     m.hud.observeField("buttonSelected", "onHudButton")
     m.sports.observeField("request", "onSportsRequest")
     m.search.observeField("query", "onSearchQuery")
     m.search.observeField("request", "onSearchRequest")
     m.od.observeField("request", "onOdRequest")
+    m.home.observeField("request", "onHomeRequest")
     m.vodTimer.observeField("fire", "onVodTick")
     m.seekTimer.observeField("fire", "onSeekTimer")
     m.parkTimer.observeField("fire", "onParkTimer")
@@ -93,6 +108,7 @@ sub init()
     applyScreenFit()
     m.video.disableScreenSaver = true
     loadFavsCache()
+    m.hud.showHome = m.homeOn
     m.top.setFocus(true)
     if regRead("host", "") <> "" then quickPlay()
     start()
@@ -135,6 +151,8 @@ sub loadAll()
     end if
     m.hud.callFunc("hideAll")
     m.guide.callFunc("closeGuide")
+    if m.home.visible then hideHome()
+    m.returnHome = false
     m.task = CreateObject("roSGNode", "LoadTask")
     m.task.mode = "boot"
     m.task.hideUnmapped = m.hideUnmapped
@@ -169,6 +187,7 @@ end sub
 
 sub rememberChannel(idx as Integer)
     ch = m.channels[idx]
+    noteRecent(ch.numStr)
     regWrite("last", ch.numStr)
     regWrite("lastUrl", ch.url)
     regWrite("lastName", ch.name)
@@ -209,6 +228,7 @@ sub onTaskResult()
         end for
     end if
     if m.pendingLink <> "" then
+        m.homeAuto = false
         li = linkIndex(m.pendingLink)
         m.pendingLink = ""
         if li >= 0 then start_idx = li
@@ -230,9 +250,15 @@ sub onTaskResult()
     end if
     m.guide.favs = m.favs
     startFavsTask()
+    fetchSettings()
     ' the guide refresh is heavy: give the video a head start, and skip it if the cache is fresh
     if not guideFresh then m.guideDelay.control = "start"
-    showBanner()
+    if m.homeAuto and m.homeOn and homeAtStart() then
+        m.homeAuto = false
+        openHome()
+    else
+        showBanner()
+    end if
     launchComplete()
 end sub
 
@@ -391,6 +417,10 @@ sub runFavTask(mode as String, num as String, on as Boolean)
     t.control = "RUN"
 end sub
 
+sub onFavRetry()
+    if m.mode <> "boot" then startFavsTask()
+end sub
+
 sub startFavsTask()
     runFavTask("favs", "", true)
 end sub
@@ -399,10 +429,16 @@ sub onFavResult(event as Object)
     r = event.getData()
     if r = invalid then return
     if r.ok then
+        m.favRetries = 0
         applyFavArray(r.favs)
+        if m.mode = "home" then m.home.callFunc("reload")
     else
-        showToast("Couldn't reach TunerBox favorites")
-        if m.mode <> "boot" then startFavsTask()
+        if m.favRetries = 0 then showToast("Couldn't reach TunerBox favorites")
+        if m.mode <> "boot" and m.favRetries < 5 then
+            m.favRetries = m.favRetries + 1
+            m.favRetryTimer.duration = 10 * m.favRetries     ' 10, 20, 30, 40, 50 s
+            m.favRetryTimer.control = "start"
+        end if
     end if
 end sub
 
@@ -473,7 +509,15 @@ sub showGuideMenu()
     if m.favs[ch.numStr] <> invalid then favText = "Remove from favorites"
     viewText = "Show favorites only"
     if m.guideTitle = "FAVORITES" then viewText = "Show all channels"
-    showDialog("gmenu", ch.numStr + " " + ch.name, ["Guide options"], [favText, viewText, "Search", "Sports", "On Demand", "Main menu", "Close"], ["fav", "favview", "search", "sports", "ondemand", "mainmenu", "close"])
+    buttons = [favText, viewText, "Category (All, Movies, Sports, News, Kids)", "Search", "Sports", "On Demand"]
+    actions = ["fav", "favview", "category", "search", "sports", "ondemand"]
+    if m.homeOn then
+        buttons.Push("Home")
+        actions.Push("home")
+    end if
+    buttons.Append(["Main menu", "Close"])
+    actions.Append(["mainmenu", "close"])
+    showDialog("gmenu", ch.numStr + " " + ch.name, ["Guide options"], buttons, actions)
 end sub
 
 sub runGuideMenuAction(action as String)
@@ -490,6 +534,10 @@ sub runGuideMenuAction(action as String)
         openSports()
     else if action = "mainmenu" then
         showMenu()
+    else if action = "category" then
+        showDialog("gcat", "Category", ["Show only the channels with a show of this category on in the hours shown"], ["All channels", "Movies", "Sports", "News", "Kids", "Close"], ["g:", "g:movies", "g:sports", "g:news", "g:kids", "close"])
+    else if action = "home" then
+        openHome()
     end if
 end sub
 
@@ -551,6 +599,8 @@ end function
 
 ' make idx the "real" channel (as opposed to a guide preview)
 sub commitChannel(idx as Integer)
+    m.returnHome = false
+    if m.mode = "home" then leaveHome()
     if idx <> m.curIdx then
         m.lastIdx = m.curIdx
         m.curIdx = idx
@@ -590,6 +640,10 @@ end sub
 
 sub onVideoState()
     st = m.video.state
+    if m.rec <> invalid then
+        recState(st)
+        return
+    end if
     if m.vod <> invalid then
         vodState(st)
         return
@@ -749,7 +803,9 @@ function onKeyEvent(key as String, press as Boolean) as Boolean
         return false
     end if
 
+    m.homeAuto = false
     if m.mode = "vod" then return vodKey(key)
+    if m.mode = "rec" then return recKey(key)
 
     if m.mode <> "live" then return false
 
@@ -805,6 +861,8 @@ function liveLit(ch as String) as Boolean
         toggleFavCurrent()
     else if lc = "v" then
         openFavorites()
+    else if lc = "h" and m.homeOn then
+        openHome()
     else
         return false
     end if
@@ -820,7 +878,10 @@ end sub
 ' ============================================================ HUD buttons
 sub onHudButton()
     id = m.hud.buttonSelected
-    if id = "chup" then
+    if id = "home" then
+        m.hud.callFunc("hideAll")
+        openHome()
+    else if id = "chup" then
         changeChannel(1)
     else if id = "chdn" then
         changeChannel(-1)
@@ -854,6 +915,7 @@ end sub
 
 ' ============================================================ guide
 sub openGuide(startIdx as Integer, view as Object, title as String)
+    coverHome()
     m.hud.callFunc("hideAll")
     m.mode = "guide"
     m.guideTitle = title
@@ -875,9 +937,11 @@ end sub
 sub onGuideExit()
     closeGuide()
     if m.extern = invalid and m.playIdx <> m.curIdx then playChannel(m.curIdx)
+    backToHome()
 end sub
 
 sub onGuideTune()
+    m.returnHome = false
     idx = m.guide.tuneRequest
     closeGuide()
     commitChannel(idx)
@@ -888,6 +952,10 @@ end sub
 sub onGuidePreview()
     idx = m.guide.previewRequest
     ' preview stays on the current channel while browsing the guide (no retune)
+end sub
+
+sub onGuideNotice()
+    if m.mode = "guide" and m.guide.notice <> "" then showToast(m.guide.notice)
 end sub
 
 sub onGuideMenu()
@@ -946,6 +1014,7 @@ end sub
 
 sub openSports()
     if m.mode = "boot" or m.mode = "needhost" or m.mode = "error" then return
+    coverHome()
     if m.mode = "guide" then closeGuide()
     if m.mode = "search" then closeSearch()
     m.hud.callFunc("hideAll")
@@ -1055,6 +1124,7 @@ sub onSportsRequest()
     ty = req.type
     if ty = "close" then
         closeSports()
+        backToHome()
     else if ty = "program" then
         p = req.p
         if p = invalid or p.ch = invalid then return
@@ -1133,6 +1203,7 @@ end function
 
 ' tune a TunerBox channel number: use the loaded list when it's there, otherwise stream it directly
 sub watchChannelNum(num as String, name as String)
+    m.returnHome = false
     idx = chIndexByNum(num)
     closeSports()
     if idx >= 0 then
@@ -1151,6 +1222,7 @@ sub watchFeed(f as Object)
         showToast("That slot is empty or the event has ended")
         return
     end if
+    m.returnHome = false
     esc = urlEncode(f.key)
     u = m.base + "/api/feed/stream?key=" + esc
     closeSports()
@@ -1189,6 +1261,7 @@ end function
 sub openSearch()
     if m.mode = "boot" or m.mode = "needhost" or m.mode = "error" then return
     if m.mode = "search" then return
+    coverHome()
     m.searchFrom = ""
     if m.mode = "guide" then
         m.searchFrom = "guide"
@@ -1296,7 +1369,11 @@ sub onSearchRequest()
     ty = req.type
     if ty = "close" then
         closeSearch()
-        if m.searchFrom = "guide" then openGuide(m.curIdx, invalid, "")
+        if m.searchFrom = "guide" then
+            openGuide(m.curIdx, invalid, "")
+        else
+            backToHome()
+        end if
     else if ty = "channel" then
         searchWatch(req.num, req.name)
     else if ty = "vod" then
@@ -1316,6 +1393,7 @@ sub onSearchRequest()
             return
         end if
         closeSearch()
+        m.returnHome = false
         playExternal({ num: "EVENT", name: f.group, title: f.name, url: m.base + "/api/feed/stream?key=" + urlEncode(f.key) })
         showBanner()
     else if ty = "program" then
@@ -1331,6 +1409,7 @@ end sub
 
 ' tune a channel number: from the loaded list if it's there, otherwise stream it straight from TunerBox
 sub searchWatch(num as String, name as String)
+    m.returnHome = false
     closeSearch()
     idx = chIndexByNum(num)
     if idx >= 0 then
@@ -1428,6 +1507,8 @@ sub restoreFocus()
         m.search.setFocus(true)
     else if m.mode = "ondemand" then
         m.od.setFocus(true)
+    else if m.mode = "home" then
+        m.home.setFocus(true)
     else
         m.top.setFocus(true)
     end if
@@ -1500,10 +1581,16 @@ sub onDlgButton()
         if action = "ok" and txt.Trim() <> "" and m.mode = "ondemand" then m.od.searchText = txt.Trim()
     else if kind = "vodnext" then
         vodNextAction(action)
+    else if kind = "hvod" or kind = "hrec" or kind = "hsched" then
+        it = m.homeReq
+        m.homeReq = invalid
+        if it <> invalid then homeDialogAction(kind, action, it)
     else if kind = "menu" then
         runMenuAction(action)
     else if kind = "gmenu" then
         runGuideMenuAction(action)
+    else if kind = "gcat" then
+        if Left(action, 2) = "g:" and m.mode = "guide" then m.guide.callFunc("setGenre", Mid(action, 3))
     end if
 end sub
 
@@ -1568,7 +1655,7 @@ sub applyScreenFit()
     pct = Val(regRead("fit", "2.5")) / 100.0
     m.fitScale = 1.0 - 2.0 * pct
     m.fitOff = [Int(1920 * pct + 0.5), Int(1080 * pct + 0.5)]
-    for each n in [m.hud, m.sports, m.search, m.od, m.menu, m.statusGroup, m.toast]
+    for each n in [m.hud, m.sports, m.search, m.od, m.home, m.menu, m.statusGroup, m.toast]
         n.scale = [m.fitScale, m.fitScale]
         n.translation = m.fitOff
     end for
@@ -1576,6 +1663,7 @@ sub applyScreenFit()
     m.guide.safe = [m.fitOff[0], m.fitOff[1], m.fitOff[0], m.fitOff[1]]
     if m.mode = "guide" or (m.mode = "fitcal" and m.calPrev = "guide") then setPreviewSize(true)
     if m.mode = "ondemand" then setOdPreview()
+    if m.mode = "home" or (m.mode = "fitcal" and m.calPrev = "home") then setPanelPreview(m.home)
     if m.fitCal.visible then drawFitFrame()
 end sub
 
@@ -1640,7 +1728,12 @@ function fitCalKey(key as String) as Boolean
 end function
 
 function menuItems() as Object
-    return [
+    items = []
+    if m.homeOn then
+        items.Push({ id: "home", label: "Home" })
+        items.Push({ id: "homestart", label: "Start on Home (this Roku)", value: onOff(homeAtStart()) })
+    end if
+    items.Append([
         { id: "server", label: "Change server address" },
         { id: "reload", label: "Reload channels and guide" },
         { id: "favorites", label: "Favorites" },
@@ -1653,7 +1746,8 @@ function menuItems() as Object
         { id: "stats", label: "Stream stats" },
         { id: "about", label: "About" },
         { id: "close", label: "Close" }
-    ]
+    ])
+    return items
 end function
 
 sub showMenu()
@@ -1740,7 +1834,7 @@ sub onMenuSelected()
     end if
     if id = "leagues" then
         showLeagues()
-    else if id = "fmt" or id = "compat" then
+    else if id = "fmt" or id = "compat" or id = "homestart" then
         ' toggles keep the menu open and refresh the value in place
         runMenuAction(id)
         m.menu.items = menuItems()
@@ -1753,7 +1847,11 @@ sub onMenuSelected()
 end sub
 
 sub runMenuAction(action as String)
-    if action = "server" then
+    if action = "home" then
+        openHome()
+    else if action = "homestart" then
+        if homeAtStart() then regWrite("homeStart", "0") else regWrite("homeStart", "1")
+    else if action = "server" then
         promptHost()
     else if action = "reload" then
         m.useCache = false
@@ -1797,6 +1895,7 @@ end sub
 ' args: {} | { kind } | { showId } | { movieId } | { episode } (see OnDemandView.openOD)
 sub openOnDemand(args as Object)
     if m.mode = "boot" or m.mode = "needhost" or m.mode = "error" then return
+    coverHome()
     if m.mode = "guide" then closeGuide()
     if m.mode = "sports" then closeSports()
     if m.mode = "search" then closeSearch()
@@ -1810,7 +1909,12 @@ end sub
 
 ' live TV keeps playing in the panel's corner
 sub setOdPreview()
-    pr = m.od.previewRect
+    setPanelPreview(m.od)
+end sub
+
+' a panel's live-TV corner (its previewRect, in the panel's own coordinates) on screen
+sub setPanelPreview(view as Object)
+    pr = view.previewRect
     if pr = invalid or pr.Count() <> 4 then return
     s = m.fitScale
     m.video.translation = [m.fitOff[0] + Int(pr[0] * s), m.fitOff[1] + Int(pr[1] * s)]
@@ -1831,7 +1935,7 @@ sub onOdRequest()
     ty = req.type
     if ty = "close" then
         closeOnDemand()
-        showBanner()
+        if not backToHome() then showBanner()
     else if ty = "toast" then
         showToast(req.text)
     else if ty = "dialog" then
@@ -1917,6 +2021,7 @@ sub startVod(it as Object, start as Float, back as Boolean)
         d.close = true
     end if
     if m.menu.visible then m.menu.callFunc("closeMenu")
+    coverHome()
     if m.mode = "ondemand" then m.od.callFunc("closeOD")
     if m.mode = "guide" then closeGuide()
     if m.mode = "sports" then closeSports()
@@ -2083,7 +2188,7 @@ sub vodStop(backToOD as Boolean)
         m.mode = "ondemand"
         m.od.callFunc("reopenOD")
         setOdPreview()
-    else
+    else if not backToHome() then
         showBanner()
     end if
 end sub
@@ -2138,6 +2243,10 @@ sub onSeekTimer()
 end sub
 
 sub onVodTick()
+    if m.rec <> invalid then
+        recTick()
+        return
+    end if
     v = m.vod
     if v = invalid or m.mode <> "vod" or v.done then return
     m.hud.callFunc("updateVod", vodInfo())
@@ -2217,3 +2326,451 @@ function vodKey(key as String) as Boolean
     end if
     return true
 end function
+
+
+' ============================================================ Home (TunerBox GET /api/home)
+' Only when TunerBox's Setup > Settings "Home screen" is on, as the web screens. Opens at launch unless
+' "Start on Home" is off in this Roku's Menu; Back goes to live TV, and screens opened from Home come back to it.
+function homeAtStart() as Boolean
+    return m.homeOn and regRead("homeStart", "1") = "1"
+end function
+
+' channels this Roku tuned to, newest first (Home > Recent channels)
+sub noteRecent(num as String)
+    if num = "" then return
+    out = [num]
+    for each n in regRead("recent", "").Split(",")
+        if n <> "" and n <> num and out.Count() < 12 then out.Push(n)
+    end for
+    regWrite("recent", out.Join(","))
+end sub
+
+sub fetchSettings()
+    homeApi("settings", "/api/settings", "", invalid, {})
+end sub
+
+' small call to TunerBox for Home (results come back in onHomeApi)
+sub homeApi(tag as String, path as String, method as String, body as Dynamic, ctx as Object)
+    t = CreateObject("roSGNode", "LoadTask")
+    t.mode = "api"
+    t.baseUrl = m.base
+    t.apiPath = path
+    t.apiMethod = method
+    if body <> invalid then t.apiBody = FormatJson(body)
+    t.apiTag = tag
+    t.apiCtx = ctx
+    t.observeField("result", "onHomeApi")
+    m.homeTasks.Push(t)
+    if m.homeTasks.Count() > 8 then m.homeTasks.Shift()
+    t.control = "RUN"
+end sub
+
+sub onHomeApi(event as Object)
+    r = event.getData()
+    if r = invalid then return
+    if r.tag = "settings" then
+        if r.ok and Type(r.data) = "roAssociativeArray" then applySettings(r.data)
+        m.homeAuto = false
+    else if r.tag = "hchange" then
+        if r.ok then showToast(r.ctx.ok) else showToast(r.ctx.fail)
+        if m.mode = "home" then m.home.callFunc("reload")
+    end if
+end sub
+
+sub applySettings(d as Object)
+    on = false
+    v = d.home_screen
+    if v <> invalid and GetInterface(v, "ifBoolean") <> invalid then on = v
+    if on <> m.homeOn then
+        m.homeOn = on
+        if on then regWrite("homeOn", "1") else regWrite("homeOn", "0")
+        m.hud.showHome = on
+    end if
+    if not on and m.mode = "home" then
+        leaveHome()
+        showBanner()
+    else if on and m.homeAuto and m.mode = "live" and homeAtStart() then
+        openHome()
+    end if
+end sub
+
+sub openHome()
+    if m.mode = "boot" or m.mode = "needhost" or m.mode = "error" or m.mode = "fitcal" or m.mode = "vod" or m.mode = "rec" then return
+    if not m.homeOn then
+        ' Home is off in TunerBox: the guide, as the web screens do
+        if m.mode <> "guide" then openGuide(m.curIdx, invalid, "")
+        return
+    end if
+    if m.channels.Count() = 0 then return
+    m.homeAuto = false
+    m.hud.callFunc("hideAll")
+    if m.menu.visible then m.menu.callFunc("closeMenu")
+    if m.mode = "guide" then closeGuide()
+    if m.mode = "sports" then closeSports()
+    if m.mode = "search" then closeSearch()
+    if m.mode = "ondemand" then m.od.callFunc("closeOD")
+    m.returnHome = false
+    m.mode = "home"
+    m.home.baseUrl = m.base
+    m.home.recent = regRead("recent", "")
+    m.home.callFunc("openHome")
+    setPanelPreview(m.home)
+end sub
+
+' Home off the screen (the video back to full size), mode unchanged
+sub hideHome()
+    m.home.callFunc("closeHome")
+    setPreviewSize(false)
+end sub
+
+' from Home to live TV
+sub leaveHome()
+    if m.home.visible then hideHome()
+    if m.mode = "home" then m.mode = "live"
+    m.returnHome = false
+    m.top.setFocus(true)
+end sub
+
+' another screen opens over Home: Back from it comes back here
+sub coverHome()
+    if m.mode <> "home" then return
+    hideHome()
+    m.mode = "live"
+    m.returnHome = true
+end sub
+
+' the screen that was opened from Home just closed (now on live TV): show Home again
+function backToHome() as Boolean
+    if not m.returnHome then return false
+    m.returnHome = false
+    if not m.homeOn or m.mode <> "live" then return false
+    openHome()
+    return true
+end function
+
+sub onHomeRequest()
+    req = m.home.request
+    if req = invalid or m.mode <> "home" then return
+    ty = req.type
+    if ty = "close" then
+        leaveHome()
+        showBanner()
+    else if ty = "fav" then
+        if anyStr(req.num) <> "" then toggleFav(anyStr(req.num))
+    else if ty = "nav" then
+        homeNav(req.id)
+    else if ty = "pick" then
+        homePick(req.item)
+    end if
+end sub
+
+sub homeNav(id as String)
+    if id = "tv" then
+        leaveHome()
+        showBanner()
+    else if id = "guide" then
+        openGuide(m.curIdx, invalid, "")
+    else if id = "ondemand" then
+        openOnDemand({})
+    else if id = "sports" then
+        openSports()
+    else if id = "search" then
+        openSearch()
+    else if id = "menu" then
+        showMenu()
+    end if
+end sub
+
+sub homePick(it as Object)
+    if Type(it) <> "roAssociativeArray" then return
+    t = it.t
+    if t = "nav" then
+        homeNav(it.id)
+    else if t = "chan" then
+        homeTune(anyStr(it.number))
+    else if t = "vod" then
+        id = anyStr(it.id)
+        if anyStr(it.kind) <> "series" then
+            openOnDemand({ movieId: id })
+        else if anyStr(it.resume) = "" then
+            openOnDemand({ showId: id })
+        else
+            sb = anyStr(it["sub"])
+            lbl = "Resume episode"
+            if sb <> "" then lbl = "Resume " + sb
+            m.homeReq = it
+            showDialog("hvod", plainText(anyStr(it.name)), [sb], [lbl, "All episodes", "Close"], ["resume", "all", "close"])
+        end if
+    else if t = "rec" then
+        homeRecDialog(it)
+    else if t = "game" then
+        homeGame(it.p)
+    else
+        homeSchedDialog(it)
+    end if
+end sub
+
+sub homeTune(num as String)
+    idx = chIndexByNum(num)
+    if idx < 0 then
+        showToast("Channel " + num + " is not available")
+        return
+    end if
+    commitChannel(idx)
+    if m.playIdx <> idx or m.extern <> invalid then playChannel(idx)
+    showBanner()
+end sub
+
+' a game on now: its channel, or the event feed that carries it
+sub homeGame(p as Dynamic)
+    if Type(p) <> "roAssociativeArray" then return
+    if Type(p.ch) = "roAssociativeArray" then
+        leaveHome()
+        watchChannelNum(numToStr(p.ch.number), anyStr(p.ch.name))
+    else if Type(p.feed) = "roAssociativeArray" and anyStr(p.feed.key) <> "" then
+        f = p.feed
+        leaveHome()
+        playExternal({ num: "EVENT", name: anyStr(f.group), title: plainText(anyStr(f.name)), url: m.base + "/api/feed/stream?key=" + urlEncode(anyStr(f.key)) })
+        showBanner()
+    else
+        showToast("None of your channels carry this game")
+    end if
+end sub
+
+sub homeRecDialog(it as Object)
+    at = numv(it.position)
+    watched = truthy(it.watched)
+    resume = (not watched and at > 30)
+    buttons = []
+    actions = []
+    if resume then
+        buttons.Push("Resume from " + fmtDur(at))
+        actions.Push("resume")
+        buttons.Push("Play from the beginning")
+    else
+        buttons.Push("Play")
+    end if
+    actions.Push("play")
+    buttons.Append(["Delete recording", "Close"])
+    actions.Append(["delete", "close"])
+    startAt = Int(numv(it.start))
+    msg = [anyStr(it.number) + " " + anyStr(it.channel_name), fmtDay(startAt) + "  " + fmtClock(startAt) + dashSep() + fmtClock(Int(numv(it.stop)))]
+    if resume then
+        msg.Push("You stopped at " + fmtDur(at))
+    else if watched then
+        msg.Push("Watched")
+    end if
+    if anyStr(it.error) <> "" then msg.Push(anyStr(it.error))
+    m.homeReq = it
+    showDialog("hrec", plainText(anyStr(it.title)), msg, buttons, actions)
+end sub
+
+' a recording to come or a reminder: watch it if it's on, or cancel it
+sub homeSchedDialog(it as Object)
+    num = anyStr(it.number)
+    t = nowEpoch()
+    onAir = (numv(it.start) <= t and t < numv(it.stop))
+    buttons = []
+    actions = []
+    if onAir and chIndexByNum(num) >= 0 then
+        buttons.Push("Watch now")
+        actions.Push("watch")
+    end if
+    if it.t = "sched" then
+        if anyStr(it.status) = "recording" then buttons.Push("Stop recording") else buttons.Push("Cancel recording")
+        actions.Push("cancelrec")
+    else
+        buttons.Push("Cancel reminder")
+        actions.Push("cancelrem")
+    end if
+    buttons.Push("Close")
+    actions.Push("close")
+    startAt = Int(numv(it.start))
+    msg = [num + " " + anyStr(it.channel_name), fmtDay(startAt) + "  " + fmtClock(startAt) + dashSep() + fmtClock(Int(numv(it.stop)))]
+    m.homeReq = it
+    showDialog("hsched", plainText(anyStr(it.title)), msg, buttons, actions)
+end sub
+
+sub homeDialogAction(kind as String, action as String, it as Object)
+    id = anyStr(it.id)
+    if kind = "hvod" then
+        if action = "resume" then
+            playVod(anyStr(it.resume), -1, false)
+        else if action = "all" then
+            openOnDemand({ showId: id })
+        end if
+    else if kind = "hrec" then
+        if action = "resume" then
+            playRecording(it, numv(it.position))
+        else if action = "play" then
+            playRecording(it, 0)
+        else if action = "delete" then
+            homeApi("hchange", "/api/recordings/" + id + "?delete=1", "DELETE", invalid, { ok: "Recording deleted", fail: "Couldn't delete the recording" })
+        end if
+    else if kind = "hsched" then
+        if action = "watch" then
+            homeTune(anyStr(it.number))
+        else if action = "cancelrec" then
+            msg = "Recording cancelled"
+            if anyStr(it.status) = "recording" then msg = "Recording stopped"
+            homeApi("hchange", "/api/recordings/" + id, "DELETE", invalid, { ok: msg, fail: "Couldn't reach TunerBox" })
+        else if action = "cancelrem" then
+            homeApi("hchange", "/api/reminders/" + id, "DELETE", invalid, { ok: "Reminder cancelled: " + anyStr(it.title), fail: "Couldn't reach TunerBox" })
+        end if
+    end if
+end sub
+
+' ============================================================ recordings (played from Home)
+' The recorded file is played as it is (GET /api/recordings/<id>/file), so skipping is a normal seek.
+' Where you got to is saved on TunerBox, so any screen can resume it.
+sub playRecording(it as Object, from as Float)
+    if m.menu.visible then m.menu.callFunc("closeMenu")
+    coverHome()
+    m.hud.callFunc("hideAll")
+    setPreviewSize(false)
+    m.mode = "rec"
+    m.top.setFocus(true)
+    id = anyStr(it.id)
+    f = LCase(anyStr(it.file))
+    fmt = "ts"
+    if Right(f, 4) = ".mp4" or Right(f, 4) = ".m4v" then fmt = "mp4"
+    if Right(f, 4) = ".mkv" then fmt = "mkv"
+    c = CreateObject("roSGNode", "ContentNode")
+    c.url = m.base + "/api/recordings/" + id + "/file"
+    c.title = anyStr(it.title)
+    c.streamFormat = fmt
+    if from > 0 then c.PlayStart = from
+    m.rec = { it: it, id: id, ticks: 0, paused: false, ended: false }
+    m.video.control = "stop"
+    m.video.content = c
+    m.video.control = "play"
+    m.video.mute = m.hud.muted
+    m.vodTimer.control = "start"
+    if from > 0 then showToast("Resuming from " + fmtDur(from)) else showToast(plainText(anyStr(it.title)))
+    showRecHud(5)
+end sub
+
+sub recState(st as String)
+    r = m.rec
+    if st = "finished" then
+        recSave(true)
+        r.ended = true
+        recStop()
+    else if st = "error" then
+        showToast("Can't play this recording")
+        recStop()
+    end if
+end sub
+
+sub recTick()
+    r = m.rec
+    if m.mode <> "rec" then return
+    m.hud.callFunc("updateVod", recInfo())
+    if r.paused then return
+    r.ticks = r.ticks + 1
+    if r.ticks mod 15 = 0 then recSave(false)
+end sub
+
+sub recSave(ended as Boolean)
+    r = m.rec
+    if r = invalid or r.ended then return
+    dur = m.video.duration
+    at = m.video.position
+    if ended and dur > 0 then at = dur
+    if at < 5 then return
+    homeApi("recprog", "/api/recordings/" + r.id + "/progress", "", { position: at, duration: dur }, {})
+end sub
+
+function recInfo() as Object
+    r = m.rec
+    at = m.video.position
+    dur = m.video.duration
+    times = fmtDur(at)
+    pct = 0.0
+    if dur > 0 then
+        times = times + " / " + fmtDur(dur)
+        pct = at / dur
+    end if
+    badge = ""
+    if r.paused then badge = "PAUSED"
+    sb = anyStr(r.it.subtitle)
+    if sb = "" then sb = anyStr(r.it.episode)
+    hint = "Left -10s   Right +30s   Rew/FF 5 min   OK Pause   Back Stop"
+    return { num: "REC", name: plainText(anyStr(r.it.channel_name)), logo: "", title: plainText(anyStr(r.it.title)), subtitle: plainText(sb), times: times, pct: pct, nextText: hint, rating: badge }
+end function
+
+sub showRecHud(secs as Integer)
+    if m.rec = invalid then return
+    m.hud.callFunc("showVod", recInfo(), secs)
+end sub
+
+sub recSeek(delta as Float)
+    t = m.video.position + delta
+    dur = m.video.duration
+    if dur > 0 and t > dur - 5 then t = dur - 5
+    if t < 0 then t = 0
+    m.video.seek = t
+    showRecHud(5)
+end sub
+
+function recKey(key as String) as Boolean
+    r = m.rec
+    if r = invalid then
+        m.mode = "live"
+        return false
+    end if
+    if key = "OK" or key = "play" then
+        if r.paused then
+            r.paused = false
+            m.video.control = "resume"
+            showRecHud(5)
+        else
+            r.paused = true
+            m.video.control = "pause"
+            recSave(false)
+            showRecHud(0)
+        end if
+    else if key = "left" or key = "replay" then
+        recSeek(-10)
+    else if key = "right" then
+        recSeek(30)
+    else if key = "rewind" then
+        recSeek(-300)
+    else if key = "fastforward" then
+        recSeek(300)
+    else if key = "up" or key = "down" or key = "options" then
+        showRecHud(5)
+    else if key = "back" then
+        recStop()
+    else if Left(key, 4) = "Lit_" then
+        lc = LCase(Mid(key, 5))
+        if lc = "m" then
+            toggleMute()
+        else if lc = "i" then
+            showRecHud(5)
+        else if lc = "s" then
+            recStop()
+        end if
+    else
+        return false
+    end if
+    return true
+end function
+
+' Back / the end: return to the channel you were on, and to Home if you came from there
+sub recStop()
+    if m.rec = invalid then return
+    recSave(false)
+    m.rec = invalid
+    if m.vod = invalid then m.vodTimer.control = "stop"
+    m.hud.callFunc("hideAll")
+    m.video.control = "stop"
+    m.mode = "live"
+    m.top.setFocus(true)
+    if m.extern <> invalid then
+        playExternal(m.extern)
+    else if m.curIdx >= 0 then
+        playChannel(m.curIdx)
+    end if
+    if not backToHome() then showBanner()
+end sub

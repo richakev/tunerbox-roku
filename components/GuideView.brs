@@ -60,8 +60,17 @@ sub init()
     m.rowCells = []
     m.chanNodes = []
 
+    ' category filter (as the web guide): only channels with a show of that genre on in the hours shown;
+    ' other shows are dimmed. Same word matching as TunerBox (epg.GENRES).
+    m.GENRES = [["", "All"], ["movies", "Movies"], ["sports", "Sports"], ["news", "News"], ["kids", "Kids"]]
+    m.genre = ""
+    m.genreNone = false     ' that genre isn't on anywhere: every channel shown, all dimmed
+    m.pick = false          ' the highlight is on the category picker
+    m.baseView = []         ' the channels before filtering (all, or favorites only)
+
     m.bgGroup = m.top.findNode("bgGroup")
     m.hdrBar = m.top.findNode("hdrBar")
+    m.pickRect = m.top.findNode("pickRect")
     m.safe = [0, 0, 0, 0]
     layout()
 end sub
@@ -128,6 +137,8 @@ sub layout()
     m.hdrBar.translation = [L, m.HDR_Y]
     m.hdrBar.width = R - L
     m.dateLbl.translation = [L + 14, m.HDR_Y]
+    m.pickRect.translation = [L, m.HDR_Y]
+    m.pickRect.width = m.CH_W
     m.ROWS_Y = m.HDR_Y + m.HDR_H + 4
 
     hintY = B - m.HINT_H
@@ -158,7 +169,7 @@ sub onGuideData()
     computeDataMax()
     if m.top.visible and m.view.Count() > 0 then
         if m.maxT < m.dataMax then m.maxT = m.dataMax
-        redraw()
+        if m.genre <> "" then refilter(false) else redraw()
     end if
 end sub
 
@@ -196,6 +207,10 @@ sub openGuide(info as Object)
     end if
     m.filterLbl.text = ""
     if info.title <> invalid then m.filterLbl.text = info.title
+    m.baseView = m.view
+    m.genre = ""
+    m.genreNone = false
+    m.pick = false
 
     t = nowEpoch()
     m.minT = floor30(t)
@@ -235,6 +250,7 @@ sub closeGuide()
     m.fRow = invalid
     m.jumpBuf = ""
     m.jumpLbl.visible = false
+    m.pick = false
     m.top.focusedChannel = -1
     m.top.visible = false
     m.top.setFocus(false)
@@ -250,7 +266,7 @@ sub redraw()
 
     ws = m.winStart
     we = ws + m.WIN
-    m.dateLbl.text = fmtDay(ws)
+    drawPicker()
 
     for k = 0 to 3
         cx = m.TIME_X + Int(k * 30 * m.PPM)
@@ -332,7 +348,11 @@ function buildRowCells(ch as Object, ws as Integer, we as Integer) as Object
                 if p.start > t then cells.Push(emptyCell(t, p.start))
                 s = p.start
                 if s < t then s = t
-                cells.Push({ start: s, stop: p.stop, title: p.title, prog: p, base: catColor(p.cat), txtColor: "0xFFFFFFFF" })
+                if m.genre <> "" and genreOf(p.cat) <> m.genre then
+                    cells.Push({ start: s, stop: p.stop, title: p.title, prog: p, base: "0x1C2B4EFF", txtColor: "0x8FA3C8FF" })
+                else
+                    cells.Push({ start: s, stop: p.stop, title: p.title, prog: p, base: catColor(p.cat), txtColor: "0xFFFFFFFF" })
+                end if
                 if p.stop > t then t = p.stop
             end if
         end for
@@ -388,9 +408,9 @@ sub applyFocus()
     m.fCell = pick
     m.fRow = r
     m.top.focusedChannel = m.view[m.row]
-    styleCell(pick, true)
-    styleChannel(r, true)
-    updateInfo(pick)
+    styleCell(pick, not m.pick)
+    styleChannel(r, not m.pick)
+    if m.pick then pickerInfo() else updateInfo(pick)
 
 end sub
 
@@ -499,7 +519,8 @@ sub moveTime(dir as Integer)
     m.focusT = nt
     if nt < m.winStart or nt >= m.winStart + m.WIN then
         m.winStart = floor30(nt)
-        redraw()
+        ' other hours: the channels showing the category change too
+        if m.genre <> "" then refilter(false) else redraw()
     else
         applyFocus()
     end if
@@ -567,6 +588,22 @@ end sub
 function onKeyEvent(key as String, press as Boolean) as Boolean
     if not press then return false
     if not m.top.visible or m.fCell = invalid then return false
+    if m.pick then
+        if key = "left" or key = "right" then
+            if key = "right" then cycleGenre(1, false) else cycleGenre(-1, false)
+            return true
+        else if key = "OK" or key = "down" or key = "back" or key = "up" then
+            setPick(false)
+            return true
+        end if
+        ' anything else: back on the channels, and the key does its usual thing
+        setPick(false)
+    end if
+    if key = "up" and m.row = 0 then
+        ' Up on the first channel: the category picker
+        setPick(true)
+        return true
+    end if
     if key = "left" then
         moveTime(-1)
     else if key = "right" then
@@ -611,6 +648,8 @@ function litKey(ch as String) as Boolean
         m.top.menuRequest = "fav"
     else if lc = "v" then
         m.top.menuRequest = "favview"
+    else if lc = "c" then
+        cycleGenre(1, true)
     else
         return false
     end if
@@ -627,7 +666,7 @@ end sub
 ' ------------------------------------------------------------ hint bar
 sub buildHints(x0 as Integer, y as Integer, maxW as Integer)
     m.hintsGroup.removeChildrenIndex(m.hintsGroup.getChildCount(), 0)
-    hints = [["OK", "Watch/Options"], ["*", "Options"], ["R", "Record"], ["/", "Search"], ["T", "Sports"], ["V", "Favs"], ["REW/FF", "Page"], ["< >", "Time"], ["0-9", "Ch#"], ["BACK", "Exit"]]
+    hints = [["OK", "Watch/Options"], ["*", "Options"], ["R", "Record"], ["/", "Search"], ["T", "Sports"], ["V", "Favs"], ["UP", "Category"], ["REW/FF", "Page"], ["< >", "Time"], ["0-9", "Ch#"], ["BACK", "Exit"]]
     x = 0
     for each hnt in hints
         capW = Len(hnt[0]) * 16 + 26
@@ -644,4 +683,131 @@ sub buildHints(x0 as Integer, y as Integer, maxW as Integer)
     if x - 20 > maxW then sc = maxW / (x - 20)
     m.hintsGroup.scale = [sc, sc]
     m.hintsGroup.translation = [x0, y + Int(m.HINT_H * (1 - sc) / 2)]
+end sub
+
+' ------------------------------------------------------------ category filter
+' "movies" / "sports" / "news" / "kids" for a program category, "" for anything else (TunerBox epg.genre)
+function genreOf(cat as Dynamic) as String
+    if cat = invalid then return ""
+    c = LCase(cat)
+    if c = "" then return ""
+    if Instr(1, c, "movie") > 0 or Instr(1, c, "film") > 0 then return "movies"
+    if Instr(1, c, "sport") > 0 then return "sports"
+    if Instr(1, c, "news") > 0 then return "news"
+    for each w in ["kids", "children", "family", "animation", "cartoon"]
+        if Instr(1, c, w) > 0 then return "kids"
+    end for
+    return ""
+end function
+
+function genreLabel() as String
+    for each g in m.GENRES
+        if g[0] = m.genre then return g[1]
+    end for
+    return "All"
+end function
+
+' does this channel have a show of the genre on between ws and we?
+function hasGenre(ch as Object, g as String, ws as Integer, we as Integer) as Boolean
+    if ch.programs = invalid then return false
+    for each p in ch.programs
+        if p.start >= we then return false
+        if p.stop > ws and genreOf(p.cat) = g then return true
+    end for
+    return false
+end function
+
+' called by the scene (guide menu > Category)
+sub setGenre(id as String)
+    m.genre = id
+    m.pick = false
+    refilter(true)
+end sub
+
+sub cycleGenre(stepBy as Integer, announce as Boolean)
+    i = 0
+    for k = 0 to m.GENRES.Count() - 1
+        if m.GENRES[k][0] = m.genre then i = k
+    end for
+    n = m.GENRES.Count()
+    m.genre = m.GENRES[(i + stepBy + n) mod n][0]
+    refilter(announce)
+end sub
+
+' rebuild the channel list for the category; the highlighted channel stays if it's still listed
+sub refilter(announce as Boolean)
+    cur = -1
+    if m.row >= 0 and m.row < m.view.Count() then cur = m.view[m.row]
+    m.genreNone = false
+    if m.genre = "" then
+        m.view = m.baseView
+    else
+        ws = m.winStart
+        we = ws + m.WIN
+        list = []
+        for each ci in m.baseView
+            if hasGenre(m.chs[ci], m.genre, ws, we) then list.Push(ci)
+        end for
+        if list.Count() = 0 then
+            m.genreNone = true
+            list = m.baseView
+        end if
+        m.view = list
+    end if
+    m.row = 0
+    for i = 0 to m.view.Count() - 1
+        if m.view[i] = cur then
+            m.row = i
+            exit for
+        end if
+    end for
+    m.rowTop = m.row - 2
+    clampTop()
+    redraw()
+    if announce then
+        if m.genre = "" then
+            m.top.notice = "All channels"
+        else if m.genreNone then
+            m.top.notice = "No " + LCase(genreLabel()) + " on in these hours"
+        else
+            n = m.view.Count()
+            txt = genreLabel() + ": " + n.ToStr() + " channel"
+            if n <> 1 then txt = txt + "s"
+            m.top.notice = txt
+        end if
+    end if
+end sub
+
+sub setPick(on as Boolean)
+    m.pick = on
+    drawPicker()
+    applyFocus()
+end sub
+
+' the header's channel column: the date (with the category when one is picked), or the picker itself
+sub drawPicker()
+    lbl = genreLabel()
+    if m.pick and m.genre = "" then lbl = "All channels"
+    if m.genreNone then lbl = lbl + " " + Chr(183) + " none"
+    if m.pick then
+        m.pickRect.visible = true
+        m.dateLbl.color = "0x10244AFF"
+        m.dateLbl.text = "<  " + lbl + "  >"
+    else
+        m.pickRect.visible = false
+        m.dateLbl.color = "0xFFC845FF"
+        if m.genre = "" then
+            m.dateLbl.text = fmtDay(m.winStart)
+        else
+            m.dateLbl.text = lbl + " " + Chr(183) + " " + fmtDay(m.winStart)
+        end if
+    end if
+end sub
+
+sub pickerInfo()
+    setTitle("Filter by category", false)
+    m.badge.visible = false
+    m.subLbl.text = "Left / Right: All channels, Movies, Sports, News or Kids"
+    m.metaLbl.text = "OK or Down to go back to the channels"
+    m.descLbl.text = "Lists only the channels with a show of that category on in the hours shown. Shows of other categories are dimmed."
 end sub

@@ -12,6 +12,8 @@
     <field id="optionsRequest" type="assocarray" alwaysNotify="true" />
     <field id="menuRequest" type="string" alwaysNotify="true" />
     <field id="exitRequest" type="boolean" alwaysNotify="true" />
+    <!-- a short message for the scene to show as a toast (category filter results) -->
+    <field id="notice" type="string" alwaysNotify="true" />
     <!-- overscan insets in screen pixels [left, top, right, bottom]; the guide is laid out
          inside them at full size (it is not scaled) -->
     <field id="safe" type="array" onChange="onSafe" />
@@ -20,6 +22,8 @@
     <function name="openGuide" />
     <function name="closeGuide" />
     <function name="jumpToNumber" />
+    <!-- category filter: "" (all) | movies | sports | news | kids -->
+    <function name="setGenre" />
   </interface>
   <children>
     <!-- background with a "hole" where the live preview video shows through (built in layout()) -->
@@ -41,6 +45,8 @@
 
     <!-- grid header -->
     <Rectangle id="hdrBar" height="50" color="0x1B4FA8FF" />
+    <!-- the category picker (Up from the first channel) highlights the header's channel column -->
+    <Rectangle id="pickRect" height="50" color="0xFFC845FF" visible="false" />
     <Label id="dateLbl" width="380" height="50" vertAlign="center" color="0xFFC845FF" font="font:SmallBoldSystemFont" />
 
     <Group id="rowsGroup" />

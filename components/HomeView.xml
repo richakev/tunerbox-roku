@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<component name="HomeView" extends="Group">
+  <script type="text/brightscript" uri="pkg:/components/HomeView.brs" />
+  <script type="text/brightscript" uri="pkg:/source/utils.brs" />
+  <interface>
+    <!-- inputs from the scene -->
+    <field id="baseUrl" type="string" />
+    <!-- this Roku's recent channel numbers, newest first, comma-separated (Home > Recent channels) -->
+    <field id="recent" type="string" />
+    <!-- outputs to the scene: { type: "close" | "pick" (item) | "fav" (num) | "nav" (id) } -->
+    <field id="request" type="assocarray" alwaysNotify="true" />
+    <!-- where the live-TV preview sits, in this view's own coordinates [x, y, w, h] -->
+    <field id="previewRect" type="array" />
+    <function name="openHome" />
+    <function name="closeHome" />
+    <function name="reload" />
+  </interface>
+  <children>
+    <!-- background with a hole for the live-TV preview (top left); oversized so it still reaches the screen
+         edges when scaled into the safe area -->
+    <Rectangle translation="[-200,-200]" width="2320" height="230" color="0x08163AFF" />
+    <Rectangle translation="[-200,30]" width="240" height="315" color="0x08163AFF" />
+    <Rectangle translation="[600,30]" width="1520" height="315" color="0x08163AFF" />
+    <Rectangle translation="[-200,345]" width="2320" height="935" color="0x08163AFF" />
+    <Rectangle translation="[36,26]" width="568" height="4" color="0x4A6FC0FF" />
+    <Rectangle translation="[36,345]" width="568" height="4" color="0x4A6FC0FF" />
+    <Rectangle translation="[36,26]" width="4" height="323" color="0x4A6FC0FF" />
+    <Rectangle translation="[600,26]" width="4" height="323" color="0x4A6FC0FF" />
+
+    <!-- the highlighted tile's details -->
+    <Label id="titleLbl" translation="[640,28]" width="860" height="62" vertAlign="center" color="0xFFFFFFFF" font="font:LargeBoldSystemFont" />
+    <Label id="subLbl" translation="[640,94]" width="1240" height="40" vertAlign="center" color="0xCFE0FFFF" font="font:MediumSystemFont" />
+    <Label id="metaLbl" translation="[640,138]" width="1240" height="36" vertAlign="center" color="0xFFC845FF" font="font:SmallSystemFont" />
+    <Label id="descLbl" translation="[640,184]" width="1240" height="150" vertAlign="top" wrap="true" maxLines="4" color="0xD5E1FBFF" font="font:SmallSystemFont" />
+    <Label id="clockLbl" translation="[1500,24]" width="380" height="40" horizAlign="right" vertAlign="center" color="0xFFFFFFFF" font="font:SmallBoldSystemFont" />
+    <Label id="dateLbl" translation="[1500,62]" width="380" height="34" horizAlign="right" vertAlign="center" color="0xAFC8F5FF" font="font:SmallSystemFont" />
+
+    <Group id="rowsGroup" />
+    <Label id="msgLbl" translation="[260,560]" width="1400" height="200" horizAlign="center" vertAlign="center" wrap="true" color="0xDCE8FFFF" font="font:MediumSystemFont" />
+    <Label id="footLbl" translation="[40,1030]" width="1840" height="40" vertAlign="center" color="0xC5D3EFFF" font="font:SmallSystemFont" />
+
+    <Timer id="refreshTimer" duration="60" repeat="true" />
+    <Timer id="clockTimer" duration="20" repeat="true" />
+  </children>
+</component>

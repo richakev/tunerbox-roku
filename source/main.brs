@@ -15,6 +15,17 @@ sub Main(args as Dynamic)
     input = CreateObject("roInput")
     input.SetMessagePort(port)
 
+    ' memory monitoring (certification): warn when the app nears its memory limit or the device runs low
+    memMon = CreateObject("roAppMemoryMonitor")
+    if memMon <> invalid then
+        memMon.SetMessagePort(port)
+        memMon.EnableMemoryWarningEvent(true)
+        logMemory(memMon, "start")
+    end if
+    devInfo = CreateObject("roDeviceInfo")
+    devInfo.SetMessagePort(port)
+    devInfo.EnableLowGeneralMemoryEvent(true)
+
     handleArgs(scene, args)
 
     while true
@@ -26,8 +37,21 @@ sub Main(args as Dynamic)
             if msg.getField() = "exitApp" then return
         else if msgType = "roInputEvent" then
             handleArgs(scene, msg.getInfo())
+        else if msgType = "roAppMemoryNotificationEvent" then
+            logMemory(memMon, "warning")
+        else if msgType = "roDeviceInfoEvent" then
+            info = msg.GetInfo()
+            if info <> invalid and info.generalMemoryLevel <> invalid then
+                print "[memory] device memory level: "; info.generalMemoryLevel
+            end if
         end if
     end while
+end sub
+
+sub logMemory(memMon as Object, why as String)
+    if memMon = invalid then return
+    print "[memory] "; why; ": "; memMon.GetMemoryLimitPercent(); "% of limit used, "; memMon.GetChannelAvailableMemory(); " KB available"
+    print "[memory] limit: "; FormatJson(memMon.GetChannelMemoryLimit())
 end sub
 
 ' launch params and roInput events carry the same fields

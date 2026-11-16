@@ -6,6 +6,8 @@
     <field id="buttonSelected" type="string" alwaysNotify="true" />
     <field id="muted" type="boolean" value="false" onChange="onMuted" />
     <field id="isFav" type="boolean" value="false" onChange="onFav" />
+    <!-- HOME button first on the bar (only when TunerBox's Home screen is on) -->
+    <field id="showHome" type="boolean" value="false" onChange="onShowHome" />
     <function name="showBanner" />
     <function name="showBar" />
     <function name="hideAll" />

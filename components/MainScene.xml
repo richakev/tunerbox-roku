@@ -16,6 +16,7 @@
     <SportsView id="sports" visible="false" />
     <SearchView id="search" visible="false" />
     <OnDemandView id="od" visible="false" />
+    <HomeView id="home" visible="false" />
     <MenuView id="menu" visible="false" />
 
     <Group id="statusGroup" visible="true">
