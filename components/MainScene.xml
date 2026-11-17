@@ -14,6 +14,7 @@
     <GuideView id="guide" visible="false" />
     <PlayerHud id="hud" visible="false" />
     <SportsView id="sports" visible="false" />
+    <StatsView id="stats" visible="false" />
     <SearchView id="search" visible="false" />
     <OnDemandView id="od" visible="false" />
     <HomeView id="home" visible="false" />

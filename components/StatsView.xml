@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<component name="StatsView" extends="Group">
+  <script type="text/brightscript" uri="pkg:/components/StatsView.brs" />
+  <script type="text/brightscript" uri="pkg:/source/utils.brs" />
+  <interface>
+    <!-- input from the scene: TunerBox GET /api/sports/stats, { game, others } (game invalid = no game here) -->
+    <field id="data" type="assocarray" onChange="onData" />
+    <!-- a line instead of the panel's content ("Loading...", an error) -->
+    <field id="message" type="string" onChange="onMessage" />
+    <!-- set by the scene when a refresh didn't come back (what's shown stays, marked as old) -->
+    <field id="failed" type="boolean" alwaysNotify="true" onChange="onFailed" />
+    <!-- outputs to the scene: { type: "close" | "refresh" | "watch", o } -->
+    <field id="request" type="assocarray" alwaysNotify="true" />
+    <function name="openStats" />
+    <function name="closeStats" />
+  </interface>
+  <children>
+    <!-- the panel down the right; the picture shrinks into the space to its left (MainScene setStatsPreview).
+         Oversized past the right, top and bottom so it reaches the screen edges when scaled into the safe area. -->
+    <Rectangle translation="[1280,-200]" width="900" height="1480" color="0x0B2A6AF8" />
+    <Rectangle translation="[1280,-200]" width="3" height="1480" color="0x4F86E8FF" />
+    <Label id="leagueLbl" translation="[1312,36]" width="300" height="44" vertAlign="center" color="0xFFC845FF" />
+    <Label id="clockLbl" translation="[1600,36]" width="290" height="44" horizAlign="right" vertAlign="center" color="0xFFFFFFFF" />
+    <Group id="teamsGroup" />
+    <Group id="tabsGroup" />
+    <Group id="bodyGroup" />
+    <Label id="msgLbl" translation="[1312,420]" width="578" height="200" horizAlign="center" vertAlign="center" wrap="true" color="0xC5D3EFFF" />
+    <Group id="hintsGroup" translation="[1312,996]" />
+    <Label id="updLbl" translation="[1600,940]" width="290" height="36" horizAlign="right" vertAlign="center" color="0x8FA3C8FF" />
+    <Timer id="refreshTimer" duration="20" repeat="true" />
+  </children>
+</component>

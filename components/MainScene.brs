@@ -1,5 +1,5 @@
 ' TunerBox TV - scene controller
-' modes: boot | needhost | error | live | home | guide | sports | search | ondemand | vod | rec
+' modes: boot | needhost | error | live | home | guide | sports | stats | search | ondemand | vod | rec
 
 sub init()
     themeInit()
@@ -17,6 +17,10 @@ sub init()
     m.entryTimer = m.top.findNode("entryTimer")
     m.guideDelay = m.top.findNode("guideDelay")
     m.sports = m.top.findNode("sports")
+    m.stats = m.top.findNode("stats")
+    m.statsTasks = []
+    m.statsSeq = 0
+    m.gswOpts = invalid
     m.search = m.top.findNode("search")
     m.od = m.top.findNode("od")
     m.home = m.top.findNode("home")
@@ -87,6 +91,7 @@ sub init()
     m.guide.observeField("notice", "onGuideNotice")
     m.hud.observeField("buttonSelected", "onHudButton")
     m.sports.observeField("request", "onSportsRequest")
+    m.stats.observeField("request", "onStatsRequest")
     m.search.observeField("query", "onSearchQuery")
     m.search.observeField("request", "onSearchRequest")
     m.od.observeField("request", "onOdRequest")
@@ -326,6 +331,7 @@ sub onDeepLink()
     if m.menu.visible then m.menu.callFunc("closeMenu")
     if m.mode = "guide" then closeGuide()
     if m.mode = "sports" then closeSports()
+    if m.mode = "stats" then closeStats()
     if m.mode = "search" then closeSearch()
     if m.mode = "ondemand" then closeOnDemand()
     if m.mode = "vod" then vodLeave()
@@ -581,7 +587,7 @@ function isCompat() as Boolean
 end function
 
 function streamUrl(ch as Object) as String
-    u = ch.url
+    u = withBuffer(ch.url)
     if isCompat() then
         sep = "?"
         if Instr(1, u, "?") > 0 then sep = "&"
@@ -820,6 +826,10 @@ function onKeyEvent(key as String, press as Boolean) as Boolean
 
     m.homeAuto = false
     if m.mode = "vod" then return vodKey(key)
+    if m.mode = "stats" then
+        if key = "play" then toggleMute()
+        return true
+    end if
     if m.mode = "rec" then return recKey(key)
 
     if m.mode <> "live" then return false
@@ -862,6 +872,8 @@ function liveLit(ch as String) as Boolean
         openGuide(m.curIdx, invalid, "")
     else if lc = "i" then
         showBanner()
+    else if lc = "x" then
+        openStats()
     else if lc = "l" then
         goLast()
     else if lc = "m" then
@@ -911,6 +923,9 @@ sub hudAction(id as String)
         changeChannel(-1)
     else if id = "info" then
         showBanner()
+    else if id = "stats" then
+        m.hud.callFunc("hideAll")
+        openStats()
     else if id = "last" then
         goLast()
     else if id = "mute" then
@@ -958,6 +973,8 @@ sub showMore()
     actions.Push("mute")
     buttons.Push("Show info")
     actions.Push("info")
+    buttons.Push("Game stats & live scores")
+    actions.Push("stats")
     buttons.Push("Menu")
     actions.Push("menu")
     buttons.Push("Close")
@@ -1107,6 +1124,192 @@ sub closeSports()
     m.sports.callFunc("closeSports")
     m.mode = "live"
     m.top.setFocus(true)
+end sub
+
+' ============================================================ game stats (TunerBox /api/sports/stats)
+' A panel down the right with the box score of the game on this channel; the picture shrinks into the
+' space to its left. Opened from Menu or More > Game stats & live scores (or X on a keyboard remote).
+sub openStats()
+    if m.mode <> "live" then
+        showToast("Game stats open while watching TV")
+        return
+    end if
+    if m.curIdx < 0 and m.extern = invalid then
+        showToast("Tune to a game to see its stats")
+        return
+    end if
+    m.hud.callFunc("hideAll")
+    m.mode = "stats"
+    m.stats.callFunc("openStats")
+    m.stats.message = "Loading..."
+    setStatsPreview()
+    loadStats()
+end sub
+
+sub closeStats()
+    m.stats.callFunc("closeStats")
+    m.stats.message = ""
+    m.mode = "live"
+    setPreviewSize(false)
+    m.top.setFocus(true)
+end sub
+
+' the picture fills the screen left of the panel (which starts at x 1280 of the scaled layout)
+sub setStatsPreview()
+    w = m.fitOff[0] + Int(1280 * m.fitScale)
+    m.video.translation = [0, 0]
+    m.video.width = w
+    m.video.height = 1080
+end sub
+
+' what's on: an event feed by key, else the channel number
+function statsQuery() as String
+    if m.extern <> invalid then
+        if m.extern.key <> invalid then return "feed=" + urlEncode(m.extern.key)
+        return "ch=" + urlEncode(m.extern.num)
+    end if
+    if m.curIdx >= 0 then return "ch=" + urlEncode(m.channels[m.curIdx].numStr)
+    return ""
+end function
+
+sub loadStats()
+    q = statsQuery()
+    if q = "" then return
+    m.statsSeq = m.statsSeq + 1
+    t = CreateObject("roSGNode", "LoadTask")
+    t.mode = "api"
+    t.baseUrl = m.base
+    t.apiPath = "/api/sports/stats?" + q
+    t.apiTag = "gstats"
+    t.apiCtx = { seq: m.statsSeq }
+    t.observeField("result", "onStatsResult")
+    m.statsTasks.Push(t)
+    if m.statsTasks.Count() > 4 then m.statsTasks.Shift()
+    t.control = "RUN"
+end sub
+
+sub onStatsResult(event as Object)
+    r = event.getData()
+    if r = invalid or r.tag <> "gstats" or m.mode <> "stats" then return
+    if r.ctx = invalid or r.ctx.seq <> m.statsSeq then return       ' an older answer (the channel changed)
+    if r.ok = true and Type(r.data) = "roAssociativeArray" then
+        d = r.data
+        if Type(d.others) = "roArray" then
+            for each o in d.others
+                if Type(o) = "roAssociativeArray" then statsLineupOnly(o)
+            end for
+        end if
+        m.stats.data = d
+    else if m.stats.message <> "" then
+        m.stats.message = "Couldn't get the stats from TunerBox."
+    else
+        m.stats.failed = true
+    end if
+end sub
+
+' a Live scores game's ch / also cut to the channels in this Roku's lineup (the ones statsWatch can tune),
+' so its "places to watch" count matches what OK offers
+sub statsLineupOnly(o as Object)
+    chans = []
+    if Type(o.ch) = "roAssociativeArray" then chans.Push(o.ch)
+    if Type(o.also) = "roArray" then
+        for each c in o.also
+            if Type(c) = "roAssociativeArray" then chans.Push(c)
+        end for
+    end if
+    keep = []
+    for each c in chans
+        if chIndexByNum(numToStr(c.number)) >= 0 then keep.Push(c)
+    end for
+    o.ch = invalid
+    if keep.Count() > 0 then
+        o.ch = keep.Shift()
+    end if
+    o.also = keep
+end sub
+
+sub onStatsRequest()
+    req = m.stats.request
+    if req = invalid then return
+    if req.type = "close" then
+        closeStats()
+    else if req.type = "refresh" then
+        loadStats()
+    else if req.type = "watch" then
+        statsWatch(req.o)
+    end if
+end sub
+
+' another game from Live scores: one place to watch goes straight there; more asks which, as the
+' Sports screen does (feeds checked live first, then the channels, then the unchecked feeds)
+sub statsWatch(o as Object)
+    live = []
+    rest = []
+    chans = []
+    if Type(o.ch) = "roAssociativeArray" then chans.Push(o.ch)
+    if Type(o.also) = "roArray" then
+        for each c in o.also
+            chans.Push(c)
+        end for
+    end if
+    if Type(o.feeds) = "roArray" then
+        for each f in o.feeds
+            if anyStr(f.status) = "ok" then live.Push({ f: f }) else rest.Push({ f: f })
+        end for
+    end if
+    opts = []
+    for each x in live
+        opts.Push(x)
+    end for
+    for each c in chans
+        if chIndexByNum(numToStr(c.number)) >= 0 then opts.Push({ ch: c })
+    end for
+    for each x in rest
+        opts.Push(x)
+    end for
+    if opts.Count() = 0 then
+        showToast("None of your channels or event feeds has this game")
+        return
+    end if
+    if opts.Count() = 1 then
+        statsGo(opts[0])
+        return
+    end if
+    buttons = []
+    actions = []
+    n = opts.Count()
+    if n > 6 then n = 6
+    for i = 0 to n - 1
+        op = opts[i]
+        if op.ch <> invalid then
+            buttons.Push("Ch " + numToStr(op.ch.number) + "  " + anyStr(op.ch.name))
+        else
+            lbl = anyStr(op.f.name)
+            if Len(lbl) > 48 then lbl = Left(lbl, 47) + "..."
+            if anyStr(op.f.status) = "ok" then lbl = "LIVE  " + lbl
+            buttons.Push(lbl)
+        end if
+        actions.Push("o" + i.ToStr())
+    end for
+    buttons.Push("Cancel")
+    actions.Push("cancel")
+    m.gswOpts = opts
+    showDialog("gsw", anyStr(o.name), [opts.Count().ToStr() + " places have this game. If one doesn't work, try the next."], buttons, actions)
+end sub
+
+' watch it, then put the panel back over the new game
+sub statsGo(op as Object)
+    if op.ch <> invalid then
+        watchChannelNum(numToStr(op.ch.number), anyStr(op.ch.name))
+    else
+        watchFeed(op.f)
+    end if
+    m.hud.callFunc("hideAll")
+    m.mode = "stats"
+    m.stats.setFocus(true)
+    m.stats.message = "Loading..."
+    setStatsPreview()
+    loadStats()
 end sub
 
 sub onSportsTaskResult(event as Object)
@@ -1277,13 +1480,13 @@ sub watchFeed(f as Object)
     esc = urlEncode(f.key)
     u = m.base + "/api/feed/stream?key=" + esc
     closeSports()
-    playExternal({ num: "EVENT", name: f.group, title: f.name, url: u })
+    playExternal({ num: "EVENT", name: f.group, title: f.name, url: u, key: f.key })
     showBanner()
 end sub
 
 sub playExternal(ex as Object)
     m.extern = ex
-    u = ex.url
+    u = withBuffer(ex.url)
     if isCompat() then
         sep = "?"
         if Instr(1, u, "?") > 0 then sep = "&"
@@ -1575,6 +1778,8 @@ sub restoreFocus()
         m.guide.setFocus(true)
     else if m.mode = "sports" then
         m.sports.setFocus(true)
+    else if m.mode = "stats" then
+        m.stats.setFocus(true)
     else if m.mode = "search" then
         m.search.setFocus(true)
     else if m.mode = "ondemand" then
@@ -1632,6 +1837,13 @@ sub onDlgButton()
             end if
         end if
         m.srReq = invalid
+    else if kind = "gsw" then
+        opts = m.gswOpts
+        m.gswOpts = invalid
+        if opts <> invalid and Left(action, 1) = "o" then
+            i = Int(Val(Mid(action, 2)))
+            if i >= 0 and i < opts.Count() then statsGo(opts[i])
+        end if
     else if kind = "game" then
         g = m.gameReq
         m.gameReq = invalid
@@ -1729,7 +1941,7 @@ sub applyScreenFit()
     pct = Val(regRead("fit", "2.5")) / 100.0
     m.fitScale = 1.0 - 2.0 * pct
     m.fitOff = [Int(1920 * pct + 0.5), Int(1080 * pct + 0.5)]
-    for each n in [m.sports, m.search, m.od, m.menu, m.statusGroup, m.toast]
+    for each n in [m.sports, m.stats, m.search, m.od, m.menu, m.statusGroup, m.toast]
         n.scale = [m.fitScale, m.fitScale]
         n.translation = m.fitOff
     end for
@@ -1745,6 +1957,7 @@ sub applyScreenFit()
     m.guide.safe = [m.fitOff[0], m.fitOff[1], m.fitOff[0], m.fitOff[1]]
     if m.mode = "guide" or (m.mode = "fitcal" and m.calPrev = "guide") then setPreviewSize(true)
     if m.mode = "ondemand" then setOdPreview()
+    if m.mode = "stats" then setStatsPreview()
     if m.mode = "home" or (m.mode = "fitcal" and m.calPrev = "home") then setPanelPreview(m.home)
     if m.fitCal.visible then drawFitFrame()
 end sub
@@ -1819,9 +2032,11 @@ function menuItems() as Object
         { id: "server", label: "Change server address" },
         { id: "reload", label: "Reload channels and guide" },
         { id: "favorites", label: "Favorites" },
+        { id: "gamestats", label: "Game stats & live scores" },
         { id: "jump", label: "Jump to channel #" },
         { id: "fmt", label: "Stream format", value: UCase(regRead("fmt", "auto")) },
         { id: "compat", label: "720p mode (all channels)", value: compatLabel() },
+        { id: "buffer", label: "Stream cache", value: bufferMenuLabel() },
         { id: "hideun", label: "Hide unmapped (20000+)", value: hideLabel() },
         { id: "fit", label: "Screen fit (overscan)", value: fitLabel() },
         { id: "theme", label: "Theme", value: themeMenuLabel() },
@@ -1915,6 +2130,79 @@ sub applyTheme(name as String)
     if m.mode = "home" then m.home.callFunc("reload")
 end sub
 
+' ------------------------------------------------------------ stream cache (settings page inside the menu)
+' As the web TV screens: TunerBox's Setup > Settings > Stream cache is the default for every screen, and this
+' Roku can pick its own here. The server holds back that many seconds before it starts sending, so a stream
+' that hiccups plays from the cache instead of freezing; each channel change takes that long to start.
+function bufferChoices() as Object
+    return [0, 5, 10, 20, 30, 60]
+end function
+
+function bufferLabel(secs as Integer) as String
+    if secs <= 0 then return "Off"
+    return secs.ToStr() + " seconds"
+end function
+
+' this Roku's own choice ("" = use the server's default)
+function bufferOwn() as String
+    return regRead("buffer", "")
+end function
+
+function bufferSecs() as Integer
+    v = bufferOwn()
+    if v = "" then v = regRead("bufferServer", "0")
+    return Int(Val(v))
+end function
+
+function bufferMenuLabel() as String
+    lbl = bufferLabel(bufferSecs())
+    if bufferOwn() = "" then return lbl + " (default)"
+    return lbl
+end function
+
+function bufferItems() as Object
+    own = bufferOwn()
+    def = bufferLabel(Int(Val(regRead("bufferServer", "0"))))
+    items = [{ id: "buf_", label: "Use the default (" + def + ")", value: onOff(own = "") }]
+    for each b in bufferChoices()
+        lbl = bufferLabel(b)
+        if b = 0 then lbl = "Off: fastest channel changes"
+        items.Push({ id: "buf_" + b.ToStr(), label: lbl, value: onOff(own = b.ToStr()) })
+    end for
+    items.Push({ id: "bufback", label: "Back to menu" })
+    return items
+end function
+
+sub showBuffers()
+    m.menuPage = "buffer"
+    m.menu.heading = "Stream cache"
+    m.menu.items = bufferItems()
+    m.menu.subtitle = "Keeps more video ready so a slow or hiccuping stream doesn't freeze. Bigger = smoother, but each channel change takes that long to start."
+    m.menu.callFunc("openMenu")
+end sub
+
+' adds this Roku's stream cache to a live channel or event stream from TunerBox (without one, the server
+' uses its own default)
+function withBuffer(u as String) as String
+    own = bufferOwn()
+    if own = "" then return u
+    if Left(u, Len(m.base)) <> m.base then return u
+    if Instr(1, u, "/api/stream/") = 0 and Instr(1, u, "/api/hls/") = 0 and Instr(1, u, "/api/feed/") = 0 then return u
+    sep = "?"
+    if Instr(1, u, "?") > 0 then sep = "&"
+    return u + sep + "buf=" + own
+end function
+
+' restart what's playing live so a new stream cache takes effect
+sub retuneLive()
+    if m.vod <> invalid or m.mode = "rec" then return
+    if m.extern <> invalid then
+        playExternal(m.extern)
+    else if m.playIdx >= 0 then
+        playChannel(m.playIdx)
+    end if
+end sub
+
 sub toggleLeague(id as String)
     out = []
     sel = sportsLeagueSel()
@@ -1932,7 +2220,7 @@ sub closeMenuView()
 end sub
 
 sub onMenuClose()
-    if m.menuPage = "leagues" or m.menuPage = "themes" then
+    if m.menuPage = "leagues" or m.menuPage = "themes" or m.menuPage = "buffer" then
         showMenu()
         return
     end if
@@ -1963,8 +2251,21 @@ sub onMenuSelected()
         end if
         return
     end if
+    if m.menuPage = "buffer" then
+        if Left(id, 4) = "buf_" then
+            regWrite("buffer", Mid(id, 5))
+            m.menu.items = bufferItems()
+            showToast("Stream cache: " + bufferLabel(bufferSecs()))
+            retuneLive()
+        else if id = "bufback" then
+            showMenu()
+        end if
+        return
+    end if
     if id = "leagues" then
         showLeagues()
+    else if id = "buffer" then
+        showBuffers()
     else if id = "theme" then
         showThemes()
     else if id = "fmt" or id = "compat" or id = "homestart" then
@@ -1991,6 +2292,8 @@ sub runMenuAction(action as String)
         loadAll()
     else if action = "favorites" then
         openFavorites()
+    else if action = "gamestats" then
+        openStats()
     else if action = "jump" then
         promptJump()
     else if action = "fmt" then
@@ -2526,6 +2829,12 @@ sub applySettings(d as Object)
         if not themeValid(th) then th = "midnight"
         if th <> regRead("themeServer", "") then regWrite("themeServer", th)
         applyTheme(themeChosen())
+    end if
+    ' TunerBox's stream cache for every screen (this Roku's own choice in Menu > Stream cache wins)
+    sb = d.stream_buffer
+    if sb <> invalid and (GetInterface(sb, "ifInt") <> invalid or GetInterface(sb, "ifFloat") <> invalid or GetInterface(sb, "ifDouble") <> invalid or GetInterface(sb, "ifLongInt") <> invalid) then
+        sbs = anyStr(sb)
+        if sbs <> regRead("bufferServer", "") then regWrite("bufferServer", sbs)
     end if
     on = false
     v = d.home_screen

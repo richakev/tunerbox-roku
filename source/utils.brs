@@ -360,7 +360,7 @@ sub themeWalk(node as Object, back as Object, fwd as Object, deep as Boolean)
             node.blendColor = o
         end if
     end if
-    views = { GuideView: 1, PlayerHud: 1, SportsView: 1, SearchView: 1, OnDemandView: 1, HomeView: 1, MenuView: 1 }
+    views = { GuideView: 1, PlayerHud: 1, SportsView: 1, StatsView: 1, SearchView: 1, OnDemandView: 1, HomeView: 1, MenuView: 1 }
     for i = 0 to node.getChildCount() - 1
         ch = node.getChild(i)
         if deep or views[ch.subtype()] = invalid then themeWalk(ch, back, fwd, deep)

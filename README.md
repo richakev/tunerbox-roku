@@ -99,6 +99,12 @@ MENU > **Screen fit (overscan)** cycles 0% / 2.5% / 5% / 7.5% trimmed from each 
 All on-screen UI (guide, banner, button bar, menu, Sports) is scaled into that safe area; full-screen
 video is not affected. Raise it if the edges of the guide are cut off on your TV, lower it if there is a border.
 
+## Stream cache
+MENU > **Stream cache** (Off, 5, 10, 20, 30 or 60 seconds) holds back that much video on the server before
+playing, so a stream that stutters plays from the cache instead of freezing. Each channel change takes that
+long to start. "Use the default" follows TunerBox's Setup > Settings > Stream cache; any other choice is
+for this Roku only and is sent as `buf=` on live channel and event streams.
+
 ## Known gaps
 - Not tested on hardware; the code passes the brighterscript linter only.
 - Streams use format `ts` unless the URL ends in .m3u8; MENU > Stream format overrides.
