@@ -840,9 +840,18 @@ sub drawMain()
 end sub
 
 '' small poster made by TunerBox (GET /api/vod/poster/<id>), not the provider's full-size image
+' Search results don't carry a poster field: ask for the poster anyway (a title with no artwork 404s and
+' the tile just shows its name), and an episode found by Search shows its show's poster.
 function posterUri(t as Object) as String
-    if anyStr(t.poster) = "" or t.kind = "episode" then return ""
-    return m.top.baseUrl + "/api/vod/poster/" + urlEncode(anyStr(t.id))
+    id = anyStr(t.id)
+    if t.kind = "episode" then
+        id = anyStr(t.title_id)
+        if id = "" then return ""
+    else if t.DoesExist("poster") and anyStr(t.poster) = "" then
+        return ""
+    end if
+    if id = "" then return ""
+    return m.top.baseUrl + "/api/vod/poster/" + urlEncode(id)
 end function
 
 ' start loading the next rows' posters (off screen) so they're ready when you scroll down
