@@ -28,6 +28,11 @@ sub Main(args as Dynamic)
     devInfo.SetMessagePort(port)
     devInfo.EnableLowGeneralMemoryEvent(true)
 
+    ' HDMI-CEC: the power button on a stick/box remote turns the TV off but not the Roku,
+    ' and switching TV inputs looks the same; either way stop streaming (frees the server tuner)
+    cec = CreateObject("roCECStatus")
+    if cec <> invalid then cec.SetMessagePort(port)
+
     handleArgs(scene, args)
 
     while true
@@ -45,6 +50,18 @@ sub Main(args as Dynamic)
             info = msg.GetInfo()
             if info <> invalid and info.generalMemoryLevel <> invalid then
                 print "[memory] device memory level: "; info.generalMemoryLevel
+            end if
+        else if msgType = "roCECStatusEvent" then
+            if msg.GetMessage() = "CECStatus" then
+                info = msg.GetInfo()
+                active = true
+                if info <> invalid and info.ActiveSource <> invalid then
+                    active = info.ActiveSource
+                else if cec <> invalid then
+                    active = cec.IsActiveSource()
+                end if
+                print "[cec] active source: "; active
+                scene.standby = not active
             end if
         end if
     end while

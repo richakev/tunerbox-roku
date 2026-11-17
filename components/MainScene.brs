@@ -30,6 +30,7 @@ sub init()
     m.returnHome = false    ' the screen on top was opened from Home: Back goes back there
     m.homeReq = invalid
     m.rec = invalid
+    m.inStandby = false
     m.homeTasks = []
     m.vod = invalid
     m.vodSeq = 0
@@ -587,7 +588,7 @@ function isCompat() as Boolean
 end function
 
 function streamUrl(ch as Object) as String
-    u = withBuffer(ch.url)
+    u = withDevice(withBuffer(ch.url))
     if isCompat() then
         sep = "?"
         if Instr(1, u, "?") > 0 then sep = "&"
@@ -657,6 +658,41 @@ sub tuneNumber(numStr as String)
         end if
     end for
     showToast("No channel " + numStr)
+end sub
+
+' ------------------------------------------------------------ TV off / input switched (HDMI-CEC)
+' TV off: stop streaming so the server tuner is let go; On Demand and recordings save their spot
+' (resume them from On Demand / Recordings). TV back on: retune the live channel.
+sub onStandby()
+    if m.top.standby then
+        if m.inStandby then return
+        m.inStandby = true
+        print "[TunerBox] standby: stopping playback"
+        m.retryTimer.control = "stop"
+        if m.rec <> invalid then
+            recSave(false)
+            m.rec = invalid
+        end if
+        if m.vod <> invalid then vodLeave()
+        m.vodTimer.control = "stop"
+        if m.mode = "vod" or m.mode = "rec" then
+            m.mode = "live"
+            m.top.setFocus(true)
+        end if
+        m.hud.callFunc("hideAll")
+        m.video.control = "stop"
+    else
+        if not m.inStandby then return
+        m.inStandby = false
+        print "[TunerBox] standby over: resuming live"
+        if m.mode = "boot" or m.mode = "needhost" or m.mode = "error" then return
+        if m.extern <> invalid then
+            playExternal(m.extern)
+        else if m.curIdx >= 0 then
+            playChannel(m.curIdx)
+        end if
+        if m.mode = "live" then showBanner()
+    end if
 end sub
 
 sub onVideoState()
@@ -1486,7 +1522,7 @@ end sub
 
 sub playExternal(ex as Object)
     m.extern = ex
-    u = withBuffer(ex.url)
+    u = withDevice(withBuffer(ex.url))
     if isCompat() then
         sep = "?"
         if Instr(1, u, "?") > 0 then sep = "&"
@@ -2181,6 +2217,17 @@ sub showBuffers()
     m.menu.callFunc("openMenu")
 end sub
 
+' tells TunerBox which Roku a live channel or event stream is for: Setup > Tuners shows this Roku's name,
+' and changing channel lets go of the one it was on (so a 1-connection account can change channels)
+function withDevice(u as String) as String
+    if Left(u, Len(m.base)) <> m.base then return u
+    if Instr(1, u, "/api/stream/") = 0 and Instr(1, u, "/api/feed/") = 0 then return u
+    if Instr(1, u, "client=") > 0 then return u
+    sep = "?"
+    if Instr(1, u, "?") > 0 then sep = "&"
+    return u + sep + "client=" + urlEncode(vodClientId()) + "&name=" + urlEncode(deviceName())
+end function
+
 ' adds this Roku's stream cache to a live channel or event stream from TunerBox (without one, the server
 ' uses its own default)
 function withBuffer(u as String) as String
@@ -2448,6 +2495,20 @@ function vodClientId() as String
     return m.vodClient
 end function
 
+' the name set for this Roku in Settings > System > About (e.g. "Bedroom Roku"), shown in TunerBox's
+' Setup > Tuners as who is watching
+function deviceName() as String
+    if m.devName = invalid then
+        di = CreateObject("roDeviceInfo")
+        n = ""
+        if FindMemberFunction(di, "GetFriendlyName") <> invalid then n = di.GetFriendlyName()
+        if n = invalid or n = "" then n = di.GetModelDisplayName()
+        if n = invalid or n = "" then n = "Roku"
+        m.devName = n
+    end if
+    return m.devName
+end function
+
 ' start < 0 = resume where you stopped
 sub playVod(id as String, start as Float, back as Boolean)
     m.vodSeq = m.vodSeq + 1
@@ -2495,7 +2556,7 @@ sub vodStart(at as Float)
     v.paused = false
     v.acc = 0.0
     v.running = false
-    u = m.base + "/api/vod/stream/" + urlEncode(v.id) + "?ss=" + Int(at).ToStr() + "&client=" + urlEncode(vodClientId())
+    u = m.base + "/api/vod/stream/" + urlEncode(v.id) + "?ss=" + Int(at).ToStr() + "&client=" + urlEncode(vodClientId()) + "&name=" + urlEncode(deviceName())
     if isCompat() then u = u + "&mode=roku720"
     c = CreateObject("roSGNode", "ContentNode")
     c.url = u

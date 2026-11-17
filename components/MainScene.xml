@@ -7,6 +7,8 @@
     <field id="exitApp" type="boolean" alwaysNotify="true" />
     <!-- { contentId: channel number, mediaType } from launch args or roInput -->
     <field id="deepLink" type="assocarray" alwaysNotify="true" onChange="onDeepLink" />
+    <!-- true when the TV is off / on another input (HDMI-CEC active source lost), from main.brs -->
+    <field id="standby" type="boolean" alwaysNotify="true" onChange="onStandby" />
   </interface>
   <children>
     <Rectangle id="bg" width="1920" height="1080" color="0x000000FF" />
