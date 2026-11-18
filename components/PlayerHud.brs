@@ -56,6 +56,10 @@ end sub
 sub buildBar()
     m.ids = ["guide", "ondemand", "sports", "search", "more"]
     m.labels = ["Guide", "On Demand", "Sports & Events", "Search", "More"]
+    if not m.top.showOnDemand then
+        m.ids.Delete(1)
+        m.labels.Delete(1)
+    end if
     if m.top.showHome then
         m.ids.Unshift("home")
         m.labels.Unshift("Home")

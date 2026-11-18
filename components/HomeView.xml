@@ -7,6 +7,8 @@
     <field id="baseUrl" type="string" />
     <!-- this Roku's recent channel numbers, newest first, comma-separated (Home > Recent channels) -->
     <field id="recent" type="string" />
+    <!-- On Demand in the top bar (only when some TunerBox playlist or library has it) -->
+    <field id="vodOn" type="boolean" value="true" />
     <!-- outputs to the scene: { type: "close" | "pick" (item) | "fav" (num) | "nav" (id) } -->
     <field id="request" type="assocarray" alwaysNotify="true" />
     <!-- where the live-TV preview sits, in this view's own coordinates [x, y, w, h] -->

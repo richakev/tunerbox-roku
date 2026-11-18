@@ -1,7 +1,8 @@
 ' Home (mirrors the TunerBox web Home screen): live TV keeps playing in the corner with the highlighted
 ' tile's details beside it, then rows: shortcuts, favorites on now, Continue Watching (On Demand and
-' recordings), sports on now, recent channels, new recordings and what's coming up. Everything comes from
-' one request (GET /api/home). The scene only shows Home when TunerBox's "Home screen" setting is on, and
+' recordings), new in My Library, sports on now, recent channels, new recordings and what's coming up, in the
+' order (and with the rows hidden) set in TunerBox's Setup. Everything comes from one request (GET /api/home).
+' The scene only shows Home when TunerBox's "Home screen" setting is on, and
 ' does what a picked tile asks for (this view only draws and moves the selection).
 
 sub init()
@@ -255,34 +256,68 @@ sub onLoaded(event as Object)
 end sub
 
 ' ============================================================ rows
+' Home's rows in their usual order (ids as TunerBox's home.py ROWS). Which are shown, and in what order, is set
+' in Setup > Settings > Screens > Home rows; /api/home sends that as `rows` (an older TunerBox doesn't: usual order).
+function rowIds() as Object
+    return ["fav", "teams", "cont", "contrec", "libnew", "sports", "recent", "recorded", "coming"]
+end function
+
 function buildRows(d as Dynamic) as Object
-    rows = [{ id: "nav", label: "", poster: false, items: m.NAV }]
+    nav = []
+    for each n in m.NAV
+        if n.id <> "ondemand" or m.top.vodOn then nav.Push(n)
+    end for
+    rows = [{ id: "nav", label: "", poster: false, items: nav }]
     if not isAA(d) then return rows
-    addRow(rows, "fav", "Favorites on now", false, tagged(d.favorites, "chan", ""))
-    teams = []
-    for each p in listOf(d.teams)
-        teams.Push({ t: "game", p: p })
+    order = rowIds()
+    if Type(d.rows) = "roArray" then order = d.rows
+    for each id in order
+        rid = anyStr(id)
+        r = makeRow(d, rid)
+        if r <> invalid then addRow(rows, rid, r.label, r.poster, r.items)
     end for
-    addRow(rows, "teams", "Your teams on now", false, teams)
-    ' posters and wide recording tiles in separate rows, so each row has one shape
-    addRow(rows, "cont", "Continue Watching: On Demand", true, tagged(d["continue"], "vod", "vod"))
-    addRow(rows, "contrec", "Continue Watching: Recordings", false, tagged(d["continue"], "rec", "rec"))
-    games = []
-    for each p in listOf(d.sports)
-        games.Push({ t: "game", p: p })
-    end for
-    addRow(rows, "sports", "Sports on now", false, games)
-    addRow(rows, "recent", "Recent channels", false, tagged(d.recent, "chan", ""))
-    addRow(rows, "recorded", "Recently recorded", false, tagged(d.recorded, "rec", ""))
-    coming = []
-    for each x in listOf(d.coming)
-        it = {}
-        it.Append(x)
-        if anyStr(x.type) = "rec" then it.t = "sched" else it.t = "remind"
-        coming.Push(it)
-    end for
-    addRow(rows, "coming", "Coming up", false, coming)
     return rows
+end function
+
+' one row's { label, poster, items }, or invalid for an id this version doesn't know
+function makeRow(d as Object, id as String) as Dynamic
+    if id = "fav" then
+        return { label: "Favorites on now", poster: false, items: tagged(d.favorites, "chan", "") }
+    else if id = "teams" then
+        return { label: "Your teams on now", poster: false, items: gameItems(d.teams) }
+    else if id = "cont" then
+        ' posters and wide recording tiles in separate rows, so each row has one shape. TunerBox has already
+        ' grouped these: a film or show once (the version played last), a show at its latest episode or Up next
+        return { label: "Continue Watching: On Demand", poster: true, items: tagged(d["continue"], "vod", "vod") }
+    else if id = "contrec" then
+        return { label: "Continue Watching: Recordings", poster: false, items: tagged(d["continue"], "rec", "rec") }
+    else if id = "libnew" then
+        return { label: "New in My Library", poster: true, items: tagged(d.library_new, "vod", "") }
+    else if id = "sports" then
+        return { label: "Sports on now", poster: false, items: gameItems(d.sports) }
+    else if id = "recent" then
+        return { label: "Recent channels", poster: false, items: tagged(d.recent, "chan", "") }
+    else if id = "recorded" then
+        return { label: "Recently recorded", poster: false, items: tagged(d.recorded, "rec", "") }
+    else if id = "coming" then
+        coming = []
+        for each x in listOf(d.coming)
+            it = {}
+            it.Append(x)
+            if anyStr(x.type) = "rec" then it.t = "sched" else it.t = "remind"
+            coming.Push(it)
+        end for
+        return { label: "Coming up", poster: false, items: coming }
+    end if
+    return invalid
+end function
+
+function gameItems(list as Dynamic) as Object
+    out = []
+    for each p in listOf(list)
+        out.Push({ t: "game", p: p })
+    end for
+    return out
 end function
 
 sub addRow(rows as Object, id as String, label as String, poster as Boolean, items as Object)
@@ -799,7 +834,7 @@ sub drawInfo()
         end if
     else if it.t = "vod" then
         title = anyStr(it.name)
-        sb = anyStr(it["sub"])
+        sb = anyStr(it["sub"])     ' a show's episode ("Up next · S2 E4 ..." once the one before it is finished)
         kind = "Movie"
         if anyStr(it.kind) = "series" then kind = "TV Show"
         watched = ""
@@ -920,6 +955,10 @@ function onKeyEvent(key as String, press as Boolean) as Boolean
     else if key = "OK" then
         it = curItem()
         if it <> invalid then m.top.request = { type: "pick", item: it }
+    else if key = "play" then
+        ' straight into it (resuming where you stopped), no menu
+        it = curItem()
+        if it <> invalid then m.top.request = { type: "play", item: it }
     else if key = "options" then
         it = curItem()
         if it <> invalid and it.t = "chan" then m.top.request = { type: "fav", num: anyStr(it.number) }
@@ -928,6 +967,7 @@ function onKeyEvent(key as String, press as Boolean) as Boolean
     else if Left(key, 4) = "Lit_" then
         lc = LCase(Mid(key, 5))
         shortcuts = { g: "guide", o: "ondemand", t: "sports", m: "menu", "/": "search" }
+        if lc = "o" and not m.top.vodOn then return true
         if shortcuts[lc] <> invalid then
             m.top.request = { type: "nav", id: shortcuts[lc] }
         else if lc = "*" or lc = "f" then

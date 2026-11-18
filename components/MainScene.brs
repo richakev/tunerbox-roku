@@ -26,6 +26,10 @@ sub init()
     m.home = m.top.findNode("home")
     ' Home screen: only when TunerBox's Setup > Settings "Home screen" is on (last answer cached for the next launch)
     m.homeOn = (regRead("homeOn", "0") = "1")
+    ' TunerBox's optional features, as last heard (Setup > Settings): On Demand only when a playlist or library
+    ' has it, Record only while Setup > Settings > DVR > Recordings is on
+    m.vodOn = (regRead("vodOn", "1") = "1")
+    m.dvrOn = (regRead("dvrOn", "1") = "1")
     m.homeAuto = true       ' still launching: open on Home once we know it's on (until a key is pressed)
     m.returnHome = false    ' the screen on top was opened from Home: Back goes back there
     m.homeReq = invalid
@@ -39,6 +43,8 @@ sub init()
     m.seekTimer = m.top.findNode("seekTimer")
     m.parkTimer = m.top.findNode("parkTimer")
     m.searchFrom = ""
+    m.svod = invalid        ' the On Demand title whose play menu is open over Search or Home
+    m.svodSeq = 0
     m.menu = m.top.findNode("menu")
     m.checkTimer = m.top.findNode("checkTimer")
     m.extern = invalid
@@ -116,6 +122,8 @@ sub init()
     m.video.disableScreenSaver = true
     loadFavsCache()
     m.hud.showHome = m.homeOn
+    m.hud.showOnDemand = m.vodOn
+    m.home.vodOn = m.vodOn
     m.top.setFocus(true)
     if regRead("host", "") <> "" then quickPlay()
     start()
@@ -531,8 +539,12 @@ sub showGuideMenu()
     if m.favs[ch.numStr] <> invalid then favText = "Remove from favorites"
     viewText = "Show favorites only"
     if m.guideTitle = "FAVORITES" then viewText = "Show all channels"
-    buttons = [favText, viewText, "Category (All, Movies, Sports, News, Kids)", "Search", "Sports & Events", "On Demand"]
-    actions = ["fav", "favview", "category", "search", "sports", "ondemand"]
+    buttons = [favText, viewText, "Category (All, Movies, Sports, News, Kids)", "Search", "Sports & Events"]
+    actions = ["fav", "favview", "category", "search", "sports"]
+    if m.vodOn then
+        buttons.Push("On Demand")
+        actions.Push("ondemand")
+    end if
     if m.homeOn then
         buttons.Push("Home")
         actions.Push("home")
@@ -1001,7 +1013,7 @@ sub showMore()
     actions.Push("favs")
     buttons.Push("Last channel")
     actions.Push("last")
-    if m.extern = invalid and m.curIdx >= 0 then
+    if m.extern = invalid and m.curIdx >= 0 and m.dvrOn then
         buttons.Push("Record this show")
         actions.Push("record")
     end if
@@ -1092,8 +1104,10 @@ sub onGuideOptions()
     if req.prog <> invalid then
         title = req.prog.title
         msg = [fmtDay(req.prog.start) + "  " + fmtClock(req.prog.start) + dashSep() + fmtClock(req.prog.stop), ch.numStr + " " + ch.name]
-        buttons.Push("Record")
-        actions.Push("record")
+        if m.dvrOn then
+            buttons.Push("Record")
+            actions.Push("record")
+        end if
     end if
     buttons.Push("Jump to channel #")
     actions.Push("jump")
@@ -1419,7 +1433,9 @@ sub onSportsRequest()
         p = req.p
         if p = invalid or p.ch = invalid then return
         num = numToStr(p.ch.number)
-        if p.start > nowEpoch() + 60 then
+        if p.start > nowEpoch() + 60 and not m.dvrOn then
+            showToast("Hasn't started yet: " + fmtDay(p.start) + " " + fmtClock(p.start))
+        else if p.start > nowEpoch() + 60 then
             m.recReq = { num: num, start: p.start, title: p.title }
             showDialog("sprec", p.title, [fmtDay(p.start) + "  " + fmtClock(p.start) + dashSep() + fmtClock(p.stop), num + " " + p.ch.name, "Hasn't started yet."], ["Record", "Cancel"], ["record", "cancel"])
         else
@@ -1463,6 +1479,16 @@ sub openGame(g as Object)
         return
     end if
     if not started then msg.Push("Hasn't started yet.")
+    if not started and not m.dvrOn then
+        ' recordings are off: just where it's on
+        on = []
+        for each c in chans
+            on.Push(c.number + " " + c.name + "  (" + fmtClock(c.start) + ")")
+        end for
+        msg.Push("On " + on.Join(", "))
+        showDialog("info", g.title, msg, ["OK"], ["close"])
+        return
+    end if
     buttons = []
     actions = []
     n = chans.Count()
@@ -1667,14 +1693,16 @@ sub onSearchRequest()
     else if ty = "channel" then
         searchWatch(req.num, req.name)
     else if ty = "vod" then
+        ' a movie or an episode: its play menu over Search (no On Demand screen first); a show opens its page
         v = req.v
-        closeSearch()
         if anyStr(v.kind) = "series" then
+            closeSearch()
             openOnDemand({ showId: v.id })
         else if anyStr(v.kind) = "episode" then
-            openOnDemand({ episode: v })
+            m.svod = v
+            showDialog("svodep", plainText(anyStr(v.name)), [plainText(anyStr(v["sub"]))], ["Play", "All episodes", "Close"], ["play", "all", "close"])
         else
-            openOnDemand({ movieId: v.id })
+            vodTitleMenu(anyStr(v.id))
         end if
     else if ty = "feed" then
         f = req.f
@@ -1690,7 +1718,13 @@ sub onSearchRequest()
         p = req.prog
         if p.start > nowEpoch() + 60 then
             m.srReq = { num: req.num, name: req.name, start: p.start, title: p.title }
-            showDialog("srec", p.title, [fmtDay(p.start) + "  " + fmtClock(p.start) + dashSep() + fmtClock(p.stop), req.num + " " + req.name, "Hasn't started yet."], ["Record", "Watch channel now", "Cancel"], ["record", "watch", "cancel"])
+            buttons = ["Watch channel now", "Cancel"]
+            actions = ["watch", "cancel"]
+            if m.dvrOn then
+                buttons.Unshift("Record")
+                actions.Unshift("record")
+            end if
+            showDialog("srec", p.title, [fmtDay(p.start) + "  " + fmtClock(p.start) + dashSep() + fmtClock(p.stop), req.num + " " + req.name, "Hasn't started yet."], buttons, actions)
         else
             searchWatch(req.num, req.name)
         end if
@@ -1724,6 +1758,10 @@ end sub
 
 ' schedule a recording on TunerBox (POST /api/recordings {number, start})
 sub dvrRecordRaw(num as String, startAt as Integer, title as String)
+    if not m.dvrOn then
+        showToast("Recordings are off. Turn them on in TunerBox Setup > Settings > DVR.")
+        return
+    end if
     t = CreateObject("roSGNode", "LoadTask")
     t.mode = "record"
     t.baseUrl = m.base
@@ -1907,6 +1945,10 @@ sub onDlgButton()
         it = m.homeReq
         m.homeReq = invalid
         if it <> invalid then homeDialogAction(kind, action, it)
+    else if kind = "svod" or kind = "svodep" then
+        d = m.svod
+        m.svod = invalid
+        if d <> invalid and action <> "close" then searchVodAction(kind, action, d)
     else if kind = "menu" then
         runMenuAction(action)
     else if kind = "gmenu" then
@@ -2380,6 +2422,10 @@ end sub
 ' args: {} | { kind } | { showId } | { movieId } | { episode } (see OnDemandView.openOD)
 sub openOnDemand(args as Object)
     if m.mode = "boot" or m.mode = "needhost" or m.mode = "error" then return
+    if not m.vodOn then
+        showToast("On Demand is off: no playlist or library in TunerBox has it")
+        return
+    end if
     coverHome()
     if m.mode = "guide" then closeGuide()
     if m.mode = "sports" then closeSports()
@@ -2880,6 +2926,112 @@ sub onHomeApi(event as Object)
     else if r.tag = "hchange" then
         if r.ok then showToast(r.ctx.ok) else showToast(r.ctx.fail)
         if m.mode = "home" then m.home.callFunc("reload")
+    else if r.tag = "svod" then
+        if r.ctx.seq <> m.svodSeq or m.mode <> r.ctx.mode then return
+        if not r.ok or Type(r.data) <> "roAssociativeArray" or anyStr(r.data.id) = "" then
+            showToast("That title is no longer in the playlist")
+        else
+            searchMovieDialog(r.data)
+        end if
+    end if
+end sub
+
+' ============================================================ On Demand movies picked in Search or Home
+' a movie's play menu over the screen it was picked on, as On Demand's: resume or play, My List, watched
+sub vodTitleMenu(id as String)
+    m.svodSeq = m.svodSeq + 1
+    homeApi("svod", "/api/vod/title/" + urlEncode(id), "", invalid, { seq: m.svodSeq, mode: m.mode })
+end sub
+
+' (title details from GET /api/vod/title)
+sub searchMovieDialog(d as Object)
+    at = numv(d.position)
+    resume = (not truthy(d.watched) and at > 30)
+    buttons = []
+    actions = []
+    if resume then
+        buttons.Push("Resume from " + fmtDur(at))
+        actions.Push("resume")
+        buttons.Push("Play from the beginning")
+    else
+        buttons.Push("Play")
+    end if
+    actions.Push("play")
+    if truthy(d.in_list) then buttons.Push("Remove from My List") else buttons.Push("Add to My List")
+    actions.Push("list")
+    if truthy(d.watched) then buttons.Push("Mark as not watched") else buttons.Push("Mark as watched")
+    actions.Push("watched")
+    if resume then
+        buttons.Push("Remove from Continue Watching")
+        actions.Push("forget")
+    end if
+    buttons.Push("Close")
+    actions.Push("close")
+    genre = anyStr(d.genre)
+    if genre = "" then genre = anyStr(d.category)
+    parts = []
+    for each s in ["Movie", anyStr(d.year), fmtLen(numv(d.duration)), genre]
+        if s <> "" then parts.Push(s)
+    end for
+    msg = [parts.Join(dotSep())]
+    note = ""
+    if anyStr(d.source_name) <> "" then note = "From " + anyStr(d.source_name)
+    st = ""
+    if resume then
+        st = "You stopped at " + fmtDur(at)
+    else if truthy(d.watched) then
+        st = "Watched"
+    end if
+    if note <> "" and st <> "" then note = note + dotSep()
+    note = note + st
+    if note <> "" then msg.Push(note)
+    if anyStr(d.plot) <> "" then msg.Push(plainText(anyStr(d.plot)))
+    m.svod = d
+    showDialog("svod", plainText(anyStr(d.name)), msg, buttons, actions)
+end sub
+
+sub searchVodAction(kind as String, action as String, d as Object)
+    id = anyStr(d.id)
+    if kind = "svodep" then
+        if action = "play" then
+            playVod(id, -1, false)
+        else if action = "all" then
+            closeSearch()
+            openOnDemand({ showId: anyStr(d.title_id) })
+        end if
+    else if action = "resume" then
+        playVod(id, numv(d.position), false)
+    else if action = "play" then
+        playVod(id, 0, false)
+    else if action = "list" then
+        on = not truthy(d.in_list)
+        msg = plainText(anyStr(d.name)) + " removed from My List"
+        if on then msg = plainText(anyStr(d.name)) + " added to My List"
+        homeApi("hchange", "/api/vod/list", "POST", { id: id, on: on }, { ok: msg, fail: "Couldn't reach TunerBox" })
+    else if action = "watched" then
+        w = not truthy(d.watched)
+        msg = "Marked as not watched"
+        if w then msg = "Marked as watched"
+        homeApi("hchange", "/api/vod/watched", "POST", { id: id, watched: w }, { ok: msg, fail: "Couldn't reach TunerBox" })
+    else if action = "forget" then
+        homeApi("hchange", "/api/vod/forget", "POST", { id: id }, { ok: "Removed from Continue Watching", fail: "Couldn't reach TunerBox" })
+    end if
+end sub
+
+sub setFeatures(vodOn as Boolean, dvrOn as Boolean)
+    if dvrOn <> m.dvrOn then
+        m.dvrOn = dvrOn
+        if dvrOn then regWrite("dvrOn", "1") else regWrite("dvrOn", "0")
+    end if
+    if vodOn = m.vodOn then return
+    m.vodOn = vodOn
+    if vodOn then regWrite("vodOn", "1") else regWrite("vodOn", "0")
+    m.hud.showOnDemand = vodOn
+    m.home.vodOn = vodOn
+    if m.mode = "home" then m.home.callFunc("reload")
+    if not vodOn and m.mode = "ondemand" then
+        closeOnDemand()
+        if not backToHome() then showBanner()
     end if
 end sub
 
@@ -2897,6 +3049,12 @@ sub applySettings(d as Object)
         sbs = anyStr(sb)
         if sbs <> regRead("bufferServer", "") then regWrite("bufferServer", sbs)
     end if
+    ' optional features (an older TunerBox doesn't say: both on)
+    vo = true
+    if d.vod_available <> invalid and GetInterface(d.vod_available, "ifBoolean") <> invalid then vo = d.vod_available
+    dv = true
+    if d.dvr_enabled <> invalid and GetInterface(d.dvr_enabled, "ifBoolean") <> invalid then dv = d.dvr_enabled
+    setFeatures(vo, dv)
     on = false
     v = d.home_screen
     if v <> invalid and GetInterface(v, "ifBoolean") <> invalid then on = v
@@ -2980,6 +3138,28 @@ sub onHomeRequest()
         homeNav(req.id)
     else if ty = "pick" then
         homePick(req.item)
+    else if ty = "play" then
+        homePlay(req.item)
+    end if
+end sub
+
+' Play on a Home tile: play or resume it straight away (a show with no episode started opens its page)
+sub homePlay(it as Object)
+    if Type(it) <> "roAssociativeArray" then return
+    if it.t = "vod" then
+        if anyStr(it.kind) <> "series" then
+            playVod(anyStr(it.id), -1, false)
+        else if anyStr(it.resume) <> "" then
+            playVod(anyStr(it.resume), -1, false)     ' an Up next episode starts from the beginning
+        else
+            homePick(it)
+        end if
+    else if it.t = "rec" then
+        at = numv(it.position)
+        if truthy(it.watched) or at <= 30 then at = 0
+        playRecording(it, at)
+    else
+        homePick(it)
     end if
 end sub
 
@@ -3010,15 +3190,20 @@ sub homePick(it as Object)
     else if t = "vod" then
         id = anyStr(it.id)
         if anyStr(it.kind) <> "series" then
-            openOnDemand({ movieId: id })
+            vodTitleMenu(id)       ' its play menu over Home, not the On Demand screen
         else if anyStr(it.resume) = "" then
             openOnDemand({ showId: id })
         else
+            ' Continue Watching: TunerBox sends a show once, at its latest episode; an Up next tile (the episode
+            ' before it was finished) plays its episode from the start
             sb = anyStr(it["sub"])
-            lbl = "Resume episode"
-            if sb <> "" then lbl = "Resume " + sb
+            ep = anyStr(it.ep)
+            if ep = "" then ep = sb
+            if ep = "" then ep = "episode"
+            verb = "Resume "
+            if truthy(it.upnext) then verb = "Play "
             m.homeReq = it
-            showDialog("hvod", plainText(anyStr(it.name)), [sb], [lbl, "All episodes", "Close"], ["resume", "all", "close"])
+            showDialog("hvod", plainText(anyStr(it.name)), [plainText(sb)], [verb + plainText(ep), "All episodes", "Mark " + plainText(ep) + " as watched", "Remove from Continue Watching", "Close"], ["resume", "all", "watched", "forget", "close"])
         end if
     else if t = "rec" then
         homeRecDialog(it)
@@ -3070,6 +3255,10 @@ sub homeRecDialog(it as Object)
         buttons.Push("Play")
     end if
     actions.Push("play")
+    if resume then
+        buttons.Push("Remove from Continue Watching")
+        actions.Push("forget")
+    end if
     buttons.Append(["Delete recording", "Close"])
     actions.Append(["delete", "close"])
     startAt = Int(numv(it.start))
@@ -3117,12 +3306,20 @@ sub homeDialogAction(kind as String, action as String, it as Object)
             playVod(anyStr(it.resume), -1, false)
         else if action = "all" then
             openOnDemand({ showId: id })
+        else if action = "watched" then
+            homeApi("hchange", "/api/vod/watched", "POST", { id: anyStr(it.resume), watched: true }, { ok: "Marked as watched", fail: "Couldn't reach TunerBox" })
+        else if action = "forget" then
+            homeApi("hchange", "/api/vod/forget", "POST", { id: id }, { ok: "Removed from Continue Watching", fail: "Couldn't reach TunerBox" })
         end if
     else if kind = "hrec" then
         if action = "resume" then
             playRecording(it, numv(it.position))
         else if action = "play" then
             playRecording(it, 0)
+        else if action = "forget" then
+            ' back to the start without marking it watched: TunerBox's Continue Watching only lists recordings
+            ' stopped part-way through
+            homeApi("hchange", "/api/recordings/" + id + "/progress", "POST", { position: 0, duration: numv(it.duration) }, { ok: "Removed from Continue Watching", fail: "Couldn't reach TunerBox" })
         else if action = "delete" then
             homeApi("hchange", "/api/recordings/" + id + "?delete=1", "DELETE", invalid, { ok: "Recording deleted", fail: "Couldn't delete the recording" })
         end if

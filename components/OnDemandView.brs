@@ -472,6 +472,7 @@ sub gotCats(r as Object)
     end if
     d = r.data
     cats = [{ all: true, key: "", name: "All " + kindName(tabKind()), count: numv(d.total) }]
+    if numv(d.lib_new) > 0 then cats.Push({ all: false, key: "*libnew", name: "New in My Library", count: numv(d.lib_new) })
     if numv(d.recent) > 0 then cats.Push({ all: false, key: "*recent", name: "Recently Added", count: numv(d.recent) })
     for each c in arr(d.cats)
         nm = anyStr(c.name)
@@ -1048,7 +1049,9 @@ sub fill(t as Object, d as Dynamic)
     if d <> invalid then x = d
     movie = (t.kind = "movie")
     seen = ""
-    if anyStr(t["sub"]) <> "" then
+    if isTrue(t.upnext) and anyStr(t.ep) <> "" then
+        seen = "Up next: " + anyStr(t.ep)
+    else if anyStr(t["sub"]) <> "" then
         seen = "Stopped in " + anyStr(t["sub"])
     else if d <> invalid and movie and isTrue(d.watched) then
         seen = "Watched"
@@ -1197,11 +1200,14 @@ sub pick(t as Object)
         return
     end if
     if t.kind = "series" and anyStr(t.resume) <> "" then
-        ' Continue Watching: straight back into the episode
+        ' Continue Watching: straight back into the episode (an Up next tile: the next one, from the start)
         sb = anyStr(t["sub"])
-        lbl = "Resume episode"
-        if sb <> "" then lbl = "Resume " + sb
-        dialog(anyStr(t.name), [sb], [lbl, "All episodes", "Close"], ["resumeep", "allep", "close"], { kind: "cw", t: t })
+        ep = anyStr(t.ep)
+        if ep = "" then ep = sb
+        if ep = "" then ep = "episode"
+        verb = "Resume "
+        if isTrue(t.upnext) then verb = "Play "
+        dialog(anyStr(t.name), [sb], [verb + ep, "All episodes", "Mark " + ep + " as watched", "Remove from Continue Watching", "Close"], ["resumeep", "allep", "cwwatched", "cwforget", "close"], { kind: "cw", t: t })
         return
     end if
     if t.kind = "series" then
@@ -1301,6 +1307,10 @@ sub onDialogAction()
             play(anyStr(p.t.resume), -1)
         else if a = "allep" then
             api("show", "/api/vod/title/" + urlEncode(p.t.id), invalid, {})
+        else if a = "cwwatched" then
+            mark(anyStr(p.t.resume), true)
+        else if a = "cwforget" then
+            api("watched", "/api/vod/forget", { id: anyStr(p.t.id) }, { msg: "Removed from Continue Watching" })
         end if
     end if
 end sub

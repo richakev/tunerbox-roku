@@ -8,6 +8,8 @@
     <field id="isFav" type="boolean" value="false" onChange="onFav" />
     <!-- Home first on the bar (only when TunerBox's Home screen is on) -->
     <field id="showHome" type="boolean" value="false" onChange="onShowHome" />
+    <!-- On Demand on the bar (only when some TunerBox playlist or library has it) -->
+    <field id="showOnDemand" type="boolean" value="true" onChange="onShowHome" />
     <!-- overscan insets [left, top, right, bottom]: drawn at full size (sharp) inside them -->
     <field id="safe" type="array" onChange="onSafe" />
     <function name="showBanner" />
