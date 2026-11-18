@@ -1251,8 +1251,8 @@ sub closeSports()
 end sub
 
 ' ============================================================ game stats (TunerBox /api/sports/stats)
-' A panel down the right with the box score of the game on this channel; the picture shrinks into the
-' space to its left. Opened from Menu or More > Game stats & live scores (or X on a keyboard remote).
+' A see-through card in the top right corner with the box score of the game on this channel (a slim panel
+' down the right on Live scores); the picture stays full size behind it. Opened from Menu or More > Game stats & live scores (or X on a keyboard remote).
 sub openStats()
     if m.mode <> "live" then
         showToast("Game stats open while watching TV")
@@ -1278,12 +1278,9 @@ sub closeStats()
     m.top.setFocus(true)
 end sub
 
-' the picture fills the screen left of the panel (which starts at x 1280 of the scaled layout)
+' the picture stays full size: the panel is a see-through card over it (StatsView)
 sub setStatsPreview()
-    w = m.fitOff[0] + Int(1280 * m.fitScale)
-    m.video.translation = [0, 0]
-    m.video.width = w
-    m.video.height = 1080
+    setPreviewSize(false)
 end sub
 
 ' what's on: an event feed by key, else the channel number

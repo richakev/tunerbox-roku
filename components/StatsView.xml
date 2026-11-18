@@ -15,18 +15,21 @@
     <function name="closeStats" />
   </interface>
   <children>
-    <!-- the panel down the right; the picture shrinks into the space to its left (MainScene setStatsPreview).
-         Oversized past the right, top and bottom so it reaches the screen edges when scaled into the safe area. -->
-    <Rectangle translation="[1280,-200]" width="900" height="1480" color="0x0B2A6AF8" />
-    <Rectangle translation="[1280,-200]" width="3" height="1480" color="0x4F86E8FF" />
-    <Label id="leagueLbl" translation="[1312,36]" width="300" height="44" vertAlign="center" color="0xFFC845FF" />
-    <Label id="clockLbl" translation="[1600,36]" width="290" height="44" horizAlign="right" vertAlign="center" color="0xFFFFFFFF" />
+    <!-- over the full-size picture: a see-through card in the top right corner, as tall as what's in it;
+         on the Live scores tab a slim panel down the right. The box is drawn in StatsView.brs (layoutFrame). -->
+    <!-- everything drawn is inside "sizer", shrunk to StatsView.brs m.SIZE from the box's top-right corner (the
+         scene scales the whole view separately, for the screen's safe area) -->
+    <Group id="sizer">
+    <Group id="frameGroup" />
+    <Label id="leagueLbl" width="300" height="36" vertAlign="center" color="0x2ED47AFF" />
+    <Label id="clockLbl" width="240" height="36" horizAlign="right" vertAlign="center" color="0xFFFFFFFF" />
     <Group id="teamsGroup" />
     <Group id="tabsGroup" />
     <Group id="bodyGroup" />
-    <Label id="msgLbl" translation="[1312,420]" width="578" height="200" horizAlign="center" vertAlign="center" wrap="true" color="0xC5D3EFFF" />
-    <Group id="hintsGroup" translation="[1312,996]" />
-    <Label id="updLbl" translation="[1600,940]" width="290" height="36" horizAlign="right" vertAlign="center" color="0x8FA3C8FF" />
+    <Label id="msgLbl" height="150" horizAlign="center" vertAlign="center" wrap="true" color="0xC5D3EFFF" />
+    <Group id="hintsGroup" />
+    <Label id="updLbl" width="190" height="36" horizAlign="right" vertAlign="center" color="0x8FA3C8FF" />
+    </Group>
     <Timer id="refreshTimer" duration="20" repeat="true" />
   </children>
 </component>
