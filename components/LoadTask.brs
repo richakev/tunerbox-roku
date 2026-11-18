@@ -1,6 +1,6 @@
 ' Background loader (runs off the UI thread).
-'   mode "boot":  channel list.  cache -> sidecar /channels.json -> M3U parse
-'   mode "guide": programme guide. sidecar /guide.json -> epg.xml parse
+'   mode "boot":  channel list.  cache -> TunerBox /channels.json (older TunerBox: M3U parse)
+'   mode "guide": programme guide. TunerBox /guide.json (older TunerBox: epg.xml parse)
 ' Caches live in cachefs:/ so the second launch is nearly instant.
 
 sub init()
@@ -36,7 +36,7 @@ sub loadData()
     end if
 end sub
 
-' ============================================================ cache + sidecar helpers
+' ============================================================ cache helpers
 function cachePath(kind as String) as String
     if kind = "channels" and m.top.hideUnmapped then kind = "channels_h"
     safe = hostOnly(m.top.baseUrl)
@@ -73,12 +73,15 @@ function unmappedFlag() as String
     return "1"
 end function
 
-function sidecarBase() as String
-    return "http://" + hostOnly(m.top.baseUrl) + ":8643"
-end function
-
-function sidecarUp() as Boolean
-    return fetchText(sidecarBase() + "/health", 2500) <> ""
+' GET /channels.json: { channels: [[number, name, logo, group, url, tvg-id, tvg-name]] }, saved as the channel
+' cache (the same shape). invalid when TunerBox doesn't have it (older versions: the M3U instead).
+function fetchChannelsJson() as Dynamic
+    txt = fetchText(m.top.baseUrl + "/channels.json?unmapped=" + unmappedFlag(), 60000)
+    if txt = "" then return invalid
+    data = ParseJson(txt)
+    if Type(data) <> "roAssociativeArray" or Type(data.channels) <> "roArray" or data.channels.Count() = 0 then return invalid
+    writeCache("channels", txt)
+    return data
 end function
 
 function rowsToChannels(rows as Object) as Object
@@ -769,25 +772,20 @@ sub loadBoot()
         end if
     end if
 
-    ' ---- 2) sidecar
+    ' ---- 2) TunerBox's channel list for the Roku (GET /channels.json, gzipped, already filtered and sorted)
     m.top.status = "Loading channel list..."
-    if sidecarUp() then
-        txt = fetchText(sidecarBase() + "/channels.json?unmapped=" + unmappedFlag(), 60000)
-        if txt <> "" then
-            data = ParseJson(txt)
-            if data <> invalid and data.channels <> invalid and data.channels.Count() > 0 then
-                writeCache("channels", txt)
-                result.channels = rowsToChannels(data.channels)
-                result.guide = readGuideCache()
-                result.ok = true
-                print "[TunerBox] sidecar channels: " + result.channels.Count().ToStr() + " in " + t0.TotalMilliseconds().ToStr() + " ms"
-                m.top.result = result
-                return
-            end if
-        end if
+    data = fetchChannelsJson()
+    if data <> invalid then
+        result.channels = rowsToChannels(data.channels)
+        data = invalid
+        result.guide = readGuideCache()
+        result.ok = true
+        print "[TunerBox] channels.json: " + result.channels.Count().ToStr() + " channels in " + t0.TotalMilliseconds().ToStr() + " ms"
+        m.top.result = result
+        return
     end if
 
-    ' ---- 3) M3U
+    ' ---- 3) an older TunerBox: the M3U
     m3u = fetchText(base + "/playlist.m3u", 30000)
     print "[TunerBox] playlist: " + Len(m3u).ToStr() + " chars in " + t0.TotalMilliseconds().ToStr() + " ms"
     if m3u = "" then
@@ -821,22 +819,23 @@ sub loadGuide()
     tTo = now + hours * 3600
     result = { ok: false, guide: {}, count: 0, source: "" }
     guide = invalid
-    usedSidecar = false
 
-    m.top.status = "Checking for guide service..."
-    if sidecarUp() then
-        usedSidecar = true
-        txt = fetchText(sidecarBase() + "/guide.json?hours=" + hours.ToStr(), 60000)
-        if txt <> "" then
-            data = ParseJson(txt)
-            if data <> invalid and data.programs <> invalid then
-                writeCache("guide", txt)
-                guide = guideFromJson(data.programs, tFrom, tTo)
-                result.source = "sidecar"
-            end if
+    ' TunerBox's guide for the Roku (GET /guide.json, gzipped): only the hours shown and the channels with
+    ' listings, read with the built-in JSON parser. An older TunerBox doesn't have it: epg.xml below.
+    m.top.status = "Downloading guide..."
+    txt = fetchText(base + "/guide.json?hours=" + hours.ToStr(), 60000)
+    tDl = t0.TotalMilliseconds()
+    if txt <> "" then
+        data = ParseJson(txt)
+        if data <> invalid and Type(data.programs) = "roAssociativeArray" then
+            writeCache("guide", txt)
+            guide = guideFromJson(data.programs, tFrom, tTo)
+            result.source = "guide.json"
         end if
-        print "[TunerBox] sidecar guide ok=" + (guide <> invalid).ToStr() + " " + t0.TotalMilliseconds().ToStr() + " ms"
+        data = invalid
     end if
+    print "[TunerBox] guide.json: " + Len(txt).ToStr() + " chars, downloaded in " + tDl.ToStr() + " ms, ready in " + t0.TotalMilliseconds().ToStr() + " ms"
+    txt = ""
 
     if guide = invalid then
         guide = guideFromEpgXml(base, tFrom, tTo, t0)
@@ -856,10 +855,7 @@ sub loadGuide()
 
     ' ---- afterwards (result already delivered): refresh the channel cache for next launch
     if m.top.refreshCache then
-        if usedSidecar then
-            txt = fetchText(sidecarBase() + "/channels.json?unmapped=" + unmappedFlag(), 60000)
-            if txt <> "" and ParseJson(txt) <> invalid then writeCache("channels", txt)
-        else
+        if fetchChannelsJson() = invalid then
             m3u = fetchText(base + "/playlist.m3u", 30000)
             if m3u <> "" then
                 chs = parseM3U(m3u)
