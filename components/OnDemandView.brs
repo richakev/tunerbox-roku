@@ -703,7 +703,7 @@ function drawTab(n as Object, i as Integer, x as Integer) as Integer
         if cnt <> "" then label = label + "  " + cnt
         n.lbl.visible = true
         n.lbl.width = 0
-        n.lbl.text = label
+        n.lbl.text = plainText(label)
         w = n.lbl.boundingRect().width
         if w <= 0 then w = Len(label) * 15
         n.lbl.translation = [x + 18, 365]
@@ -776,7 +776,7 @@ end sub
 
 sub drawSideRow(n as Object, row as Object, isCur as Boolean, active as Boolean)
         n.name.text = plainText(row.name)
-        n.cnt.text = row.cnt
+        n.cnt.text = plainText(row.cnt)
         if isCur and active then
             n.bg.color = thm("0xFFC845FF")
             n.name.color = thm("0x10244AFF")
@@ -802,7 +802,7 @@ sub drawMain()
     hideEps()
     n = m.items.Count()
     if m.message <> "" then
-        m.msgLbl.text = m.message
+        m.msgLbl.text = plainText(m.message)
     else if n = 0 then
         if m.loading then
             m.msgLbl.text = "Loading..."
@@ -897,6 +897,7 @@ sub drawTile(tile as Object, t as Object, i as Integer)
             tag = "SHOW"
             tagC = thm("0x3B5B96FF")
         end if
+        tag = plainText(tag)
         tile.tag.visible = (tag <> "")
         tile.tagBg.visible = (tag <> "")
         if tag <> "" then
@@ -959,7 +960,7 @@ sub drawEpRow(n as Object, e as Object, isCur as Boolean, nx as String)
         else if e.id = nx then
             right = joinParts(["Next up", right])
         end if
-        n.right.text = right
+        n.right.text = plainText(right)
         if not isTrue(e.watched) and playPos > m.RESUME_MIN and dur > 0 then
             n.prog.visible = true
             p = playPos / dur

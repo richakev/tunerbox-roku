@@ -54,6 +54,9 @@ sub init()
     m.svod = invalid        ' the On Demand title whose play menu is open over Search or Home
     m.svodSeq = 0
     m.menu = m.top.findNode("menu")
+    m.jump = m.top.findNode("jump")
+    m.jump.observeField("result", "onJumpResult")
+    m.jump.observeField("closeRequest", "onJumpClose")
     m.checkTimer = m.top.findNode("checkTimer")
     m.extern = invalid
     m.sportsTasks = []
@@ -74,6 +77,9 @@ sub init()
     m.curIdx = -1
     m.lastIdx = -1
     m.playIdx = -1
+    m.alt = 0           ' which of the playing channel's feeds: 0 the main one, 1.. its backups (Setup's order)
+    m.altNum = ""       ' the channel number m.alt is for (a reload can put another channel at the same index)
+    m.feedTask = invalid
     m.mode = "boot"
     m.digits = ""
     m.retries = 0
@@ -166,7 +172,7 @@ sub onLaunchHost()
 end sub
 
 sub setStatus(text as String)
-    m.statusLbl.text = text
+    m.statusLbl.text = plainText(text)
     m.statusGroup.visible = true
 end sub
 
@@ -587,10 +593,21 @@ end sub
 
 ' ============================================================ playback
 sub playChannel(idx as Integer)
+    ' another channel starts on its main feed (whatever Setup has made main now); restarting the one
+    ' that's on (retry, stream cache, 720p, format) stays on the feed it was playing
+    alt = 0
+    if idx >= 0 and idx < m.channels.Count() and m.extern = invalid and m.channels[idx].numStr = m.altNum then alt = m.alt
+    playChannelFeed(idx, alt)
+end sub
+
+' a channel on one of its feeds: alt 0 = main, 1.. = backups, as /api/stream/{n}?alt= numbers them
+sub playChannelFeed(idx as Integer, alt as Integer)
     if idx < 0 or idx >= m.channels.Count() then return
     ch = m.channels[idx]
+    m.alt = alt
+    m.altNum = ch.numStr
     c = CreateObject("roSGNode", "ContentNode")
-    c.url = streamUrl(ch)
+    c.url = streamUrl({ url: withAlt(ch.url, alt), numStr: ch.numStr })
     c.title = ch.name
     c.live = true
     c.streamFormat = streamFmt(ch.url)
@@ -607,6 +624,19 @@ end sub
 ' 720p compatibility mode: applies to ALL channels (default ON, toggle in MENU)
 function isCompat() as Boolean
     return regRead("compat720", "1") = "1"
+end function
+
+function withAlt(u as String, alt as Integer) as String
+    if alt <= 0 then return u
+    sep = "?"
+    if Instr(1, u, "?") > 0 then sep = "&"
+    return u + sep + "alt=" + alt.ToStr()
+end function
+
+' backup feeds of a channel (from /channels.json; 0 when the server doesn't say)
+function chAlts(idx as Integer) as Integer
+    if idx < 0 or idx >= m.channels.Count() then return 0
+    return Int(numv(m.channels[idx].alts))
 end function
 
 function streamUrl(ch as Object) as String
@@ -730,7 +760,12 @@ sub onVideoState()
     if st = "playing" then
         m.retries = 0
     else if st = "error" or st = "finished" then
-        if m.retries < 3 then
+        ' a live channel with backups: one more try on this feed, then the next feed in Setup's order
+        if m.extern = invalid and m.playIdx >= 0 and m.retries >= 1 and m.alt < chAlts(m.playIdx) then
+            m.retryTimer.control = "stop"
+            showToast("Trying backup feed " + (m.alt + 1).ToStr() + "...")
+            playChannelFeed(m.playIdx, m.alt + 1)
+        else if m.retries < 3 then
             m.retries = m.retries + 1
             m.retryTimer.control = "stop"
             m.retryTimer.control = "start"
@@ -771,7 +806,8 @@ sub showStreamStats()
     end if
     lines.Push("Buffer underruns this channel: " + m.underruns.ToStr())
     lines.Push("Time to start: " + Str(v.timeToStartStreaming) + " s")
-    lines.Push(streamUrl(ch))
+    if m.alt > 0 then lines.Push("Feed: backup " + m.alt.ToStr() + " of " + chAlts(m.playIdx).ToStr())
+    lines.Push(streamUrl({ url: withAlt(ch.url, m.alt), numStr: ch.numStr }))
     showDialog("info", "Stream stats", lines, ["OK"], ["close"])
 end sub
 
@@ -852,7 +888,7 @@ sub showBanner()
 end sub
 
 sub showToast(text as String)
-    m.toastLbl.text = text
+    m.toastLbl.text = plainText(text)
     bb = m.toastLbl.boundingRect()
     x = Int((1920 - bb.width) / 2)
     m.toastLbl.translation = [x, 740]
@@ -1738,7 +1774,7 @@ sub onSearchRequest()
             openOnDemand({ showId: v.id })
         else if anyStr(v.kind) = "episode" then
             m.svod = v
-            showDialog("svodep", plainText(anyStr(v.name)), [plainText(anyStr(v["sub"]))], ["Play", "All episodes", "Close"], ["play", "all", "close"])
+            showDialog("svodep", anyStr(v.name), [anyStr(v["sub"])], ["Play", "All episodes", "Close"], ["play", "all", "close"])
         else
             vodTitleMenu(anyStr(v.id))
         end if
@@ -1847,9 +1883,18 @@ end function
 sub showDialog(kind as String, title as String, message as Object, buttons as Object, actions as Object)
     dlg = CreateObject("roSGNode", "StandardMessageDialog")
     dlg.palette = dialogPalette()
-    dlg.title = title
-    dlg.message = message
-    dlg.buttons = buttons
+    ' names and titles from playlists can hold characters the Roku font lacks (plainText)
+    dlg.title = plainText(title)
+    msg = []
+    for each t in message
+        msg.Push(plainText(t))
+    end for
+    dlg.message = msg
+    btns = []
+    for each b in buttons
+        btns.Push(plainText(b))
+    end for
+    dlg.buttons = btns
     m.dlgKind = kind
     m.dlgActions = actions
     m.dlg = dlg
@@ -2027,8 +2072,27 @@ sub promptSearch()
     openSearch()
 end sub
 
+' Jump to channel: our own number pad (JumpPad), the same on every Roku
 sub promptJump()
-    showKeyboard("jump", "Jump to channel", ["Channel number"], "")
+    m.hud.callFunc("hideAll")
+    m.jump.callFunc("openPad")
+end sub
+
+sub onJumpResult()
+    num = m.jump.result
+    m.jump.callFunc("closePad")
+    restoreFocus()
+    if num = "" then return
+    if m.mode = "guide" then
+        m.guide.callFunc("jumpToNumber", num)
+    else
+        tuneNumber(num)
+    end if
+end sub
+
+sub onJumpClose()
+    m.jump.callFunc("closePad")
+    restoreFocus()
 end sub
 
 sub confirmExit()
@@ -2154,31 +2218,110 @@ function fitCalKey(key as String) as Boolean
     return true
 end function
 
+' the main menu: what's used while watching; this Roku's settings and the rarely used items are under Settings
 function menuItems() as Object
     items = []
-    if m.homeOn then
-        items.Push({ id: "home", label: "Home" })
-        items.Push({ id: "homestart", label: "Start on Home (this Roku)", value: onOff(homeAtStart()) })
-    end if
+    if m.homeOn then items.Push({ id: "home", label: "Home" })
+    if canSwitchFeed() then items.Push({ id: "feeds", label: "Switch feed", value: (m.alt + 1).ToStr() + " of " + (chAlts(m.playIdx) + 1).ToStr() })
     items.Append([
-        { id: "server", label: "Change server address" },
-        { id: "reload", label: "Reload channels and guide" },
         { id: "favorites", label: "Favorites" },
         { id: "gamestats", label: "Game stats & live scores" },
         { id: "jump", label: "Jump to channel #" },
-        { id: "fmt", label: "Stream format", value: UCase(regRead("fmt", "auto")) },
-        { id: "compat", label: "720p mode (all channels)", value: compatLabel() },
-        { id: "buffer", label: "Stream cache", value: bufferMenuLabel() },
-        { id: "hideun", label: "Hide unmapped (20000+)", value: hideLabel() },
-        { id: "fit", label: "Screen fit (overscan)", value: fitLabel() },
-        { id: "theme", label: "Theme", value: themeMenuLabel() },
-        { id: "leagues", label: "Live sports leagues", value: leaguesLabel() },
-        { id: "stats", label: "Stream stats" },
-        { id: "about", label: "About" },
+        { id: "settings", label: "Settings" },
         { id: "close", label: "Close" }
     ])
     return items
 end function
+
+function settingsItems() as Object
+    items = []
+    if m.homeOn then items.Push({ id: "homestart", label: "Start on Home (this Roku)", value: onOff(homeAtStart()) })
+    items.Append([
+        { id: "compat", label: "720p mode (all channels)", value: compatLabel() },
+        { id: "fmt", label: "Stream format", value: UCase(regRead("fmt", "auto")) },
+        { id: "buffer", label: "Stream cache", value: bufferMenuLabel() },
+        { id: "theme", label: "Theme", value: themeMenuLabel() },
+        { id: "fit", label: "Screen fit (overscan)", value: fitLabel() },
+        { id: "hideun", label: "Hide unmapped (20000+)", value: hideLabel() },
+        { id: "leagues", label: "Live sports leagues", value: leaguesLabel() },
+        { id: "reload", label: "Reload channels and guide" },
+        { id: "server", label: "Change server address" },
+        { id: "stats", label: "Stream stats" },
+        { id: "about", label: "About" },
+        { id: "setback", label: "Back to menu" }
+    ])
+    return items
+end function
+
+sub showSettings()
+    m.menuPage = "settings"
+    m.menu.heading = "Settings"
+    m.menu.items = settingsItems()
+    m.menu.subtitle = "This Roku's settings. Server: " + m.base
+    m.menu.callFunc("openMenu")
+end sub
+
+' ------------------------------------------------------------ switch feed (a channel with backup feeds)
+function canSwitchFeed() as Boolean
+    if m.vod <> invalid or m.rec <> invalid or m.extern <> invalid then return false
+    return m.playIdx >= 0 and chAlts(m.playIdx) > 0
+end function
+
+function feedLabel(alt as Integer) as String
+    if alt = 0 then return "Main"
+    return "Backup " + alt.ToStr()
+end function
+
+' the feeds come from TunerBox each time, so they follow Setup's current order (shown in onFeedsApi)
+sub showFeeds()
+    idx = m.playIdx
+    if idx < 0 then return
+    t = CreateObject("roSGNode", "LoadTask")
+    t.mode = "api"
+    t.baseUrl = m.base
+    t.apiPath = "/api/channels/" + m.channels[idx].numStr + "/feeds"
+    t.apiTag = "feeds"
+    t.apiCtx = { idx: idx }
+    t.observeField("result", "onFeedsApi")
+    m.feedTask = t
+    t.control = "RUN"
+end sub
+
+sub onFeedsApi(event as Object)
+    r = event.getData()
+    if r = invalid or r.ctx.idx <> m.playIdx then return
+    ' the answer can be slow: not when another screen, a dialog or the menu is up by then
+    if m.mode <> "live" or m.dlg <> invalid or m.menu.visible then return
+    if not r.ok or Type(r.data) <> "roArray" or r.data.Count() = 0 then
+        showToast("Can't list this channel's feeds")
+        return
+    end if
+    m.channels[m.playIdx].alts = r.data.Count() - 1      ' Setup may have changed them since the list loaded
+    if r.data.Count() < 2 then
+        showToast("This channel has only one feed now")
+        return
+    end if
+    items = []
+    for i = 0 to r.data.Count() - 1
+        f = r.data[i]
+        if Type(f) <> "roAssociativeArray" then f = {}
+        a = i
+        if f.alt <> invalid then a = Int(numv(f.alt))
+        lbl = feedLabel(a) + ": " + anyStr(f.name)
+        if anyStr(f.status) = "dead" then lbl = lbl + " (not working)"
+        v = ""
+        if a = m.alt then v = "ON"
+        items.Push({ id: "fd_" + a.ToStr(), label: lbl, value: v })
+    end for
+    items.Push({ id: "fdback", label: "Back to menu" })
+    ch = m.channels[m.playIdx]
+    m.hud.callFunc("hideAll")
+    m.menuPage = "feeds"
+    m.menu.heading = "Switch feed: " + ch.numStr + " " + ch.name
+    m.menu.subtitle = "Pick a feed to watch now. Setup > Channels sets which one plays first."
+    m.menu.items = items
+    m.menu.callFunc("openMenu")
+end sub
 
 sub showMenu()
     m.hud.callFunc("hideAll")
@@ -2212,7 +2355,7 @@ function leagueItems() as Object
         items.Push({ id: "lg_" + lg.id, label: lg.label, value: onOff(leagueOn(sel, lg.id)) })
     end for
     items.Push({ id: "lgmissing", label: "Show games not in guide", value: onOff(regRead("sportsUnmatched", "1") = "1") })
-    items.Push({ id: "lgback", label: "Back to menu" })
+    items.Push({ id: "lgback", label: "Back to settings" })
     return items
 end function
 
@@ -2240,7 +2383,7 @@ function themeItems() as Object
     for each t in themeList()
         items.Push({ id: "th_" + t[0], label: t[1], value: onOff(own = t[0]) })
     end for
-    items.Push({ id: "thback", label: "Back to menu" })
+    items.Push({ id: "thback", label: "Back to settings" })
     return items
 end function
 
@@ -2301,7 +2444,7 @@ function bufferItems() as Object
         if b = 0 then lbl = "Off: fastest channel changes"
         items.Push({ id: "buf_" + b.ToStr(), label: lbl, value: onOff(own = b.ToStr()) })
     end for
-    items.Push({ id: "bufback", label: "Back to menu" })
+    items.Push({ id: "bufback", label: "Back to settings" })
     return items
 end function
 
@@ -2362,8 +2505,13 @@ sub closeMenuView()
     restoreFocus()
 end sub
 
+' Back: a page of Settings goes back to Settings, Settings and Switch feed to the menu, the menu closes
 sub onMenuClose()
     if m.menuPage = "leagues" or m.menuPage = "themes" or m.menuPage = "buffer" then
+        showSettings()
+        return
+    end if
+    if m.menuPage = "settings" or m.menuPage = "feeds" then
         showMenu()
         return
     end if
@@ -2380,7 +2528,7 @@ sub onMenuSelected()
             if regRead("sportsUnmatched", "1") = "1" then regWrite("sportsUnmatched", "0") else regWrite("sportsUnmatched", "1")
             m.menu.items = leagueItems()
         else if id = "lgback" then
-            showMenu()
+            showSettings()
         end if
         return
     end if
@@ -2390,6 +2538,19 @@ sub onMenuSelected()
             applyTheme(themeChosen())
             m.menu.items = themeItems()
         else if id = "thback" then
+            showSettings()
+        end if
+        return
+    end if
+    if m.menuPage = "feeds" then
+        if Left(id, 3) = "fd_" then
+            alt = Int(Val(Mid(id, 4)))
+            closeMenuView()
+            if alt <> m.alt and m.playIdx >= 0 then
+                showToast(m.channels[m.playIdx].numStr + ": " + LCase(feedLabel(alt)) + " feed")
+                playChannelFeed(m.playIdx, alt)
+            end if
+        else if id = "fdback" then
             showMenu()
         end if
         return
@@ -2401,20 +2562,34 @@ sub onMenuSelected()
             showToast("Stream cache: " + bufferLabel(bufferSecs()))
             retuneLive()
         else if id = "bufback" then
-            showMenu()
+            showSettings()
         end if
         return
     end if
-    if id = "leagues" then
-        showLeagues()
-    else if id = "buffer" then
-        showBuffers()
-    else if id = "theme" then
-        showThemes()
-    else if id = "fmt" or id = "compat" or id = "homestart" then
-        ' toggles keep the menu open and refresh the value in place
-        runMenuAction(id)
-        m.menu.items = menuItems()
+    if m.menuPage = "settings" then
+        if id = "leagues" then
+            showLeagues()
+        else if id = "buffer" then
+            showBuffers()
+        else if id = "theme" then
+            showThemes()
+        else if id = "fmt" or id = "compat" or id = "homestart" then
+            ' toggles keep Settings open and refresh the value in place
+            runMenuAction(id)
+            m.menu.items = settingsItems()
+        else if id = "setback" then
+            showMenu()
+        else
+            closeMenuView()
+            runMenuAction(id)
+        end if
+        return
+    end if
+    if id = "feeds" then
+        closeMenuView()
+        showFeeds()
+    else if id = "settings" then
+        showSettings()
     else if id = "close" then
         closeMenuView()
     else
@@ -2706,7 +2881,7 @@ sub avMenu()
     end if
     buttons.Push("Close")
     actions.Push("close")
-    showDialog("vodav", plainText(anyStr(v.it.title)), ["This title"], buttons, actions)
+    showDialog("vodav", anyStr(v.it.title), ["This title"], buttons, actions)
 end sub
 
 sub avAudioMenu()
@@ -2721,7 +2896,7 @@ sub avAudioMenu()
         buttons.Push(lbl)
         actions.Push("a" + n.ToStr())
     end for
-    showDialog("vodaudio", "Audio", [plainText(anyStr(v.it.title))], buttons, actions)
+    showDialog("vodaudio", "Audio", [anyStr(v.it.title)], buttons, actions)
 end sub
 
 sub avPickAudio(n as Integer)
@@ -2753,7 +2928,7 @@ sub avSubsMenu()
         buttons.Push(lbl)
         actions.Push("s" + i.ToStr())
     end for
-    showDialog("vodsubs", "Subtitles", [plainText(anyStr(v.it.title))], buttons, actions)
+    showDialog("vodsubs", "Subtitles", [anyStr(v.it.title)], buttons, actions)
 end sub
 
 sub avPickSub(i as Integer)
@@ -3463,7 +3638,7 @@ sub searchMovieDialog(d as Object)
     if note <> "" then msg.Push(note)
     if anyStr(d.plot) <> "" then msg.Push(plainText(anyStr(d.plot)))
     m.svod = d
-    showDialog("svod", plainText(anyStr(d.name)), msg, buttons, actions)
+    showDialog("svod", anyStr(d.name), msg, buttons, actions)
 end sub
 
 sub searchVodAction(kind as String, action as String, d as Object)
@@ -3679,7 +3854,7 @@ sub homePick(it as Object)
             verb = "Resume "
             if truthy(it.upnext) then verb = "Play "
             m.homeReq = it
-            showDialog("hvod", plainText(anyStr(it.name)), [plainText(sb)], [verb + plainText(ep), "All episodes", "Mark " + plainText(ep) + " as watched", "Remove from Continue Watching", "Close"], ["resume", "all", "watched", "forget", "close"])
+            showDialog("hvod", anyStr(it.name), [sb], [verb + ep, "All episodes", "Mark " + ep + " as watched", "Remove from Continue Watching", "Close"], ["resume", "all", "watched", "forget", "close"])
         end if
     else if t = "rec" then
         homeRecDialog(it)
@@ -3746,7 +3921,7 @@ sub homeRecDialog(it as Object)
     end if
     if anyStr(it.error) <> "" then msg.Push(anyStr(it.error))
     m.homeReq = it
-    showDialog("hrec", plainText(anyStr(it.title)), msg, buttons, actions)
+    showDialog("hrec", anyStr(it.title), msg, buttons, actions)
 end sub
 
 ' a recording to come or a reminder: watch it if it's on, or cancel it
@@ -3772,7 +3947,7 @@ sub homeSchedDialog(it as Object)
     startAt = Int(numv(it.start))
     msg = [num + " " + anyStr(it.channel_name), fmtDay(startAt) + "  " + fmtClock(startAt) + dashSep() + fmtClock(Int(numv(it.stop)))]
     m.homeReq = it
-    showDialog("hsched", plainText(anyStr(it.title)), msg, buttons, actions)
+    showDialog("hsched", anyStr(it.title), msg, buttons, actions)
 end sub
 
 sub homeDialogAction(kind as String, action as String, it as Object)

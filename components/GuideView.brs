@@ -236,7 +236,7 @@ sub openGuide(info as Object)
     m.filterLbl.text = ""
     m.favOnly = (info.title <> invalid and info.title = "FAVORITES")
     ' Favorites shows as a pill; any other title stays in the corner
-    if info.title <> invalid and not m.favOnly then m.filterLbl.text = info.title
+    if info.title <> invalid and not m.favOnly then m.filterLbl.text = plainText(info.title)
     m.baseView = m.view
     m.genre = ""
     m.genreNone = false
@@ -472,11 +472,11 @@ sub updateInfo(c as Object)
     if c.prog <> invalid then
         p = c.prog
         setTitle(Left(p.title, 60), p.rating <> "")
-        m.subLbl.text = subLine(p)
+        m.subLbl.text = plainText(subLine(p))
         meta = fmtDay(p.start) + "  " + fmtClock(p.start) + dashSep() + fmtClock(p.stop) + dotSep() + chText
         if p.cat <> "" then meta = meta + dotSep() + p.cat
-        m.metaLbl.text = meta
-        m.descLbl.text = p.desc
+        m.metaLbl.text = plainText(meta)
+        m.descLbl.text = plainText(p.desc)
         if p.rating <> "" then
             showBadge(p.rating)
         else
@@ -485,7 +485,7 @@ sub updateInfo(c as Object)
     else
         setTitle(ch.name, false)
         m.subLbl.text = ""
-        m.metaLbl.text = chText
+        m.metaLbl.text = plainText(chText)
         m.descLbl.text = "No guide data for this time slot."
         m.badge.visible = false
     end if
@@ -496,7 +496,7 @@ sub setTitle(txt as String, hasBadge as Boolean)
     maxW = m.TITLE_MAXW
     if hasBadge then maxW = maxW - 110
     m.titleLbl.width = 0
-    m.titleLbl.text = txt
+    m.titleLbl.text = plainText(txt)
     if m.titleLbl.boundingRect().width > maxW then m.titleLbl.width = maxW
 end sub
 
@@ -506,7 +506,7 @@ sub showBadge(txt as String)
     m.badgeLbl.width = w
     bb = m.titleLbl.boundingRect()
     m.badge.translation = [m.TITLE_X + bb.width + 18, m.TITLE_Y + 14]
-    m.badgeLbl.text = txt
+    m.badgeLbl.text = plainText(txt)
     m.badge.visible = true
 end sub
 

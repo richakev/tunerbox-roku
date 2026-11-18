@@ -207,7 +207,7 @@ end sub
 ' one row, as the web banner: number, logo card, then title (+ rating), one line of details and the progress
 sub fillBanner(info as Object)
     m.chNum.width = 0
-    m.chNum.text = info.num
+    m.chNum.text = plainText(info.num)
     x = 40 + Int(m.chNum.boundingRect().width) + 22
     hasLogo = (info.logo <> invalid and info.logo <> "")
     m.chLogo.uri = info.logo
@@ -220,11 +220,12 @@ sub fillBanner(info as Object)
     end if
 
     ' natural width, truncated before it reaches the clock (leaves room for the rating badge)
+    rating = plainText(info.rating)
     maxW = 1440 - m.inX - x
-    if info.rating <> "" then maxW = maxW - 110
+    if rating <> "" then maxW = maxW - 110
     m.titleLbl.translation = [x, 60]
     m.titleLbl.width = 0
-    m.titleLbl.text = Left(info.title, 60)
+    m.titleLbl.text = plainText(Left(info.title, 60))
     if m.titleLbl.boundingRect().width > maxW then m.titleLbl.width = maxW
 
     ' details: what it is, when, and what's next (On Demand puts its key hints on their own line)
@@ -242,13 +243,12 @@ sub fillBanner(info as Object)
     ' the channel name is in its logo; without one, it leads the details
     m.subLbl.translation = [x, 120]
     m.subLbl.width = 1460 - m.inX - x
-    m.subLbl.text = parts.Join(sep)
+    m.subLbl.text = plainText(parts.Join(sep))
     m.nextLbl.translation = [x, 186]
     m.nextLbl.width = 1760 - m.inX - x
     ' a channel's catch-up flag goes on that line when it has no key hints
     if hint = "" and info.flag <> invalid then hint = info.flag
-    m.nextLbl.text = hint
-
+    m.nextLbl.text = plainText(hint)
     hasTimes = (info.times <> "")
     m.progBg.translation = [x, 168]
     m.progFill.translation = [x, 168]
@@ -261,9 +261,9 @@ sub fillBanner(info as Object)
     m.progFill.visible = hasTimes and fw >= 10
     m.progFill.width = fw
 
-    if info.rating <> "" then
-        m.badgeLbl.text = info.rating
-        w = Len(info.rating) * 13 + 22
+    if rating <> "" then
+        m.badgeLbl.text = rating
+        w = Len(rating) * 13 + 22
         m.badgeRect.width = w
         m.badgeLbl.width = w
         bb = m.titleLbl.boundingRect()

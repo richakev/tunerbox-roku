@@ -622,19 +622,20 @@ sub drawTile(n as Object, it as Object, x as Integer, y as Integer, w as Integer
         n.title.visible = true
         n.subt.translation = [x + 12, y + h - 33]
         n.subt.width = w - 24
-        n.subt.text = v.subt
+        n.subt.text = plainText(v.subt)
         n.subt.visible = (v.subt <> "")
     end if
 
-    n.badge.visible = (v.badge <> "")
-    n.badgeBg.visible = (v.badge <> "")
-    if v.badge <> "" then
-        bw = Len(v.badge) * 13 + 20
+    badge = plainText(v.badge)
+    n.badge.visible = (badge <> "")
+    n.badgeBg.visible = (badge <> "")
+    if badge <> "" then
+        bw = Len(badge) * 13 + 20
         n.badgeBg.translation = [x + 8, y + 8]
         n.badgeBg.width = bw
         n.badge.translation = [x + 8, y + 8]
         n.badge.width = bw
-        n.badge.text = v.badge
+        n.badge.text = badge
         if v.live then
             n.badgeBg.color = thm("0xE0263AFF")
             n.badge.color = thm("0xFFFFFFFF")

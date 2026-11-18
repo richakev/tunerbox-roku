@@ -183,13 +183,20 @@ function fmtDur(secs as Float) as String
     return mi.ToStr() + ":" + ss
 end function
 
-' ------------------------------------------------------------ fancy Unicode letters -> plain
-' Playlists decorate names with superscripts / modifier letters / small caps (superscript "4K 3840P", "Dolby Vision") that the
-' Roku font doesn't have (they draw as white boxes). Turn them into ordinary letters and digits.
-function plainText(s as String) as String
+' ------------------------------------------------------------ text the Roku font can draw
+' Playlists and guides decorate names with characters the Roku's font doesn't have, which draw as white boxes:
+' superscript / small-cap letters (a superscript "RAW" after "ESPN"), "bold", "script" or "double-struck" maths
+' letters, full-width, circled and boxed letters, emoji and pictographs. The decorative letters and digits become
+' ordinary ones and emoji are left out (with the space next to them); every other character, in any language, is
+' kept as it is. Every screen's text goes through this (mkLabel, dialogs, toasts and the views' labels).
+function plainText(s as Dynamic) as String
+    if s = invalid then return ""
+    if GetInterface(s, "ifString") = invalid then return anyStr(s)
     if m.plainMap = invalid then
-        codes = [178, 179, 185, 610, 618, 628, 640, 655, 665, 668, 671, 688, 690, 691, 695, 696, 737, 738, 739, 7424, 7428, 7429, 7431, 7434, 7435, 7437, 7439, 7448, 7451, 7452, 7456, 7457, 7458, 7468, 7470, 7472, 7473, 7475, 7476, 7477, 7478, 7479, 7480, 7481, 7482, 7484, 7486, 7487, 7488, 7489, 7490, 7491, 7495, 7496, 7497, 7501, 7503, 7504, 7506, 7510, 7511, 7512, 7515, 7580, 7584, 7611, 8304, 8305, 8308, 8309, 8310, 8311, 8312, 8313, 8314, 8315, 8317, 8318, 8319, 8320, 8321, 8322, 8323, 8324, 8325, 8326, 8327, 8328, 8329, 11389, 42800, 42801]
-        repl = "231GINRYBHLhjrwylsxACDEJKMOPTUVWZABDEGHIJKLMNOPRTUWabdegkmoptuvcfz0i456789+-()n0123456789VFS"
+        ' superscript, subscript, modifier and small-cap letters and digits, then the double-struck / script /
+        ' fraktur letters Unicode keeps in Letterlike Symbols (the rest of those alphabets are maths letters)
+        codes = [178, 179, 185, 610, 618, 628, 640, 655, 665, 668, 671, 688, 690, 691, 695, 696, 737, 738, 739, 7424, 7428, 7429, 7431, 7434, 7435, 7437, 7439, 7448, 7451, 7452, 7456, 7457, 7458, 7468, 7470, 7472, 7473, 7475, 7476, 7477, 7478, 7479, 7480, 7481, 7482, 7484, 7486, 7487, 7488, 7489, 7490, 7491, 7495, 7496, 7497, 7501, 7503, 7504, 7506, 7510, 7511, 7512, 7515, 7580, 7584, 7611, 8304, 8305, 8308, 8309, 8310, 8311, 8312, 8313, 8314, 8315, 8317, 8318, 8319, 8320, 8321, 8322, 8323, 8324, 8325, 8326, 8327, 8328, 8329, 11389, 42800, 42801, 8450, 8458, 8459, 8460, 8461, 8462, 8464, 8465, 8466, 8467, 8469, 8473, 8474, 8475, 8476, 8477, 8484, 8488, 8492, 8493, 8495, 8496, 8497, 8499, 8500]
+        repl = "231GINRYBHLhjrwylsxACDEJKMOPTUVWZABDEGHIJKLMNOPRTUWabdegkmoptuvcfz0i456789+-()n0123456789VFS" + "CgHHHhIILlNPQRRRZZBCeEFMo"
         mp = {}
         for i = 0 to codes.Count() - 1
             mp[codes[i].ToStr()] = Mid(repl, i + 1, 1)
@@ -199,12 +206,64 @@ function plainText(s as String) as String
     end if
     if not m.plainRe.IsMatch(s) then return s
     out = ""
+    gap = false         ' just left something out: a space now would double the one before it
     for i = 1 to Len(s)
         c = Mid(s, i, 1)
-        r = m.plainMap[Asc(c).ToStr()]
-        if r <> invalid then out = out + r else out = out + c
+        n = Asc(c)
+        r = c
+        if n >= 128 then
+            r = m.plainMap[n.ToStr()]
+            if r = invalid then r = glyphFor(n, c)
+        end if
+        if r = "" then
+            gap = true
+        else if gap and r = " " and (out = "" or Right(out, 1) = " ") then
+            ' the space after a dropped emoji
+        else if gap and (r = ")" or r = "]") and (Right(out, 1) = "(" or Right(out, 1) = "[") then
+            ' brackets that held only an emoji: "USA (emoji)" -> "USA"
+            out = Left(out, Len(out) - 1)
+            if Right(out, 1) = " " then out = Left(out, Len(out) - 1)
+            gap = false
+        else
+            out = out + r
+            gap = false
+        end if
     end for
+    ' an emoji at the end leaves the space before it
+    if gap and Right(out, 1) = " " then out = Left(out, Len(out) - 1)
     return out
+end function
+
+' one character above ASCII (code n): a plain letter or digit for the decorative copies of them, "" for emoji,
+' pictographs and the other kinds the Roku font lacks, and the character itself for everything else
+function glyphFor(n as Integer, c as String) as String
+    ' full-width ASCII
+    if n >= 65281 and n <= 65374 then return Chr(n - 65248)
+    ' maths bold / italic / script / fraktur / double-struck / sans / mono letters: 52 per style (A-Z a-z)
+    if n >= 119808 and n <= 120483 then
+        k = (n - 119808) mod 52
+        if k < 26 then return Chr(65 + k)
+        return Chr(97 + k - 26)
+    end if
+    ' maths digits: 10 per style
+    if n >= 120782 and n <= 120831 then return Chr(48 + (n - 120782) mod 10)
+    ' circled letters and digits
+    if n >= 9398 and n <= 9423 then return Chr(65 + n - 9398)
+    if n >= 9424 and n <= 9449 then return Chr(97 + n - 9424)
+    if n >= 9312 and n <= 9320 then return Chr(49 + n - 9312)
+    ' squared / negative circled / negative squared letters
+    if n >= 127280 and n <= 127305 then return Chr(65 + n - 127280)
+    if n >= 127312 and n <= 127337 then return Chr(65 + n - 127312)
+    if n >= 127344 and n <= 127369 then return Chr(65 + n - 127344)
+    ' left out: emoji and pictographs (incl. flags, mahjong, cards), emoji modifiers and tags
+    if n >= 126976 and n <= 129791 then return ""
+    if n >= 917504 and n <= 917631 then return ""
+    ' misc technical, geometric shapes, misc symbols, dingbats, misc symbols and arrows (clocks, stars, ticks...)
+    if (n >= 8960 and n <= 9215) or (n >= 9632 and n <= 10175) or (n >= 11008 and n <= 11263) then return ""
+    ' variation selectors, zero-width joiner / spaces, keycap, byte-order mark; surrogate halves and private use
+    if (n >= 65024 and n <= 65039) or (n >= 8203 and n <= 8205) or n = 8288 or n = 8419 or n = 65279 then return ""
+    if n >= 55296 and n <= 63743 then return ""
+    return c
 end function
 
 ' ------------------------------------------------------------ colour themes
@@ -416,7 +475,7 @@ function mkLabel(x, y, w, h, text as String, size, bold as Boolean, color as Str
     end if
     l.font.size = size
     l.color = color
-    l.text = text
+    l.text = plainText(text)
     return l
 end function
 

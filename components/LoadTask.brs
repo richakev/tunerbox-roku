@@ -87,7 +87,10 @@ end function
 function rowsToChannels(rows as Object) as Object
     out = []
     for each r in rows
-        out.Push({ numStr: r[0], name: r[1], logo: r[2], group: r[3], url: r[4], tvgId: r[5], tvgName: r[6], numVal: Val(r[0]) + 0.0, programs: invalid })
+        ' r[7]: how many backup feeds the channel has (older TunerBox and older caches: none listed)
+        alts = 0
+        if r.Count() > 7 then alts = Int(numv(r[7]))
+        out.Push({ numStr: r[0], name: r[1], logo: r[2], group: r[3], url: r[4], tvgId: r[5], tvgName: r[6], alts: alts, numVal: Val(r[0]) + 0.0, programs: invalid })
     end for
     return out
 end function
@@ -95,7 +98,9 @@ end function
 function channelsToRows(channels as Object) as Object
     out = []
     for each c in channels
-        out.Push([c.numStr, c.name, c.logo, c.group, c.url, c.tvgId, c.tvgName])
+        alts = 0
+        if c.alts <> invalid then alts = c.alts
+        out.Push([c.numStr, c.name, c.logo, c.group, c.url, c.tvgId, c.tvgName, alts])
     end for
     return out
 end function

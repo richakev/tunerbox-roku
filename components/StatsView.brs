@@ -191,7 +191,7 @@ sub render()
         msg = m.top.message
         if msg = "" and not m.enabled then msg = "Sports scores are off." + Chr(10) + "To turn them on, go to TunerBox's Setup > Settings > Sports and pick the leagues (or teams) you follow."
         if msg = "" then msg = "No games are live right now."
-        m.msgLbl.text = msg
+        m.msgLbl.text = plainText(msg)
         m.msgLbl.visible = true
         buildKeyHints(m.hintsGroup, [["BACK", "Close"]], 40, m.W)
         return
@@ -209,8 +209,8 @@ sub render()
         m.BODY_Y = 330
         lg = sv(g.league)
         if sv(g.state) = "in" then lg = lg + dotSep() + "LIVE"
-        m.leagueLbl.text = lg
-        m.clockLbl.text = sv(g.detail)
+        m.leagueLbl.text = plainText(lg)
+        m.clockLbl.text = plainText(sv(g.detail))
         drawTeams()
     end if
     drawTabs()

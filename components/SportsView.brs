@@ -195,7 +195,7 @@ sub onCheck()
 end sub
 
 sub onMessage()
-    m.msgLbl.text = m.top.message
+    m.msgLbl.text = plainText(m.top.message)
 end sub
 
 ' ------------------------------------------------------------ helpers
@@ -339,7 +339,7 @@ end function
 function gamesStatus() as String
     gs = m.games
     if gs = invalid then return "Checking live game schedules..."
-    if strv(gs.leagues) = "" then return "Live game matching is off. Pick leagues in Menu > Live sports leagues."
+    if strv(gs.leagues) = "" then return "Live game matching is off. Pick leagues in Menu > Settings > Live sports leagues."
     if not isTrue(gs.ok) then return ""
     if isFalse(gs.hasGuide) then return strv(gs.leagueNames) + "  " + Chr(183) + "  guide not loaded yet, can't match channels"
     return ""
@@ -485,7 +485,7 @@ sub render()
         if intv(g.named) > 0 then s = s + intv(g.named).ToStr() + " events  " + Chr(183) + "  "
         s = s + intv(g.count).ToStr() + " feeds"
         if intv(g.live) > 0 then s = s + "  " + Chr(183) + "  " + intv(g.live).ToStr() + " live"
-        m.statusLbl.text = s
+        m.statusLbl.text = plainText(s)
         m.footLbl.text = "OK  Watch      Back  Groups      Event feeds only have video while the event is on."
     else
         m.statusLbl.text = ""
@@ -506,7 +506,7 @@ sub drawTabs()
         l = m.tabLbls[i]
         l.translation = [x, 100]
         l.width = w
-        l.text = txt
+        l.text = plainText(txt)
         if i = m.tab then
             m.tabSel.translation = [x, 100]
             m.tabSel.width = w
@@ -580,8 +580,9 @@ sub paintRow(r as Integer, it as Object, selected as Boolean)
     row.bg.visible = true
 
     tx = x0 + 16
-    if it.badge <> "" then
-        bw = Len(it.badge) * 15 + 32
+    badge = plainText(it.badge)
+    if badge <> "" then
+        bw = Len(badge) * 15 + 32
         if bw < 104 then bw = 104
         bg = thm("0x3B5B96FF")
         if it.kind = "live" then bg = thm("0xE0243CFF")
@@ -595,7 +596,7 @@ sub paintRow(r as Integer, it as Object, selected as Boolean)
         row.badgeBg.color = bg
         row.badgeBg.visible = true
         row.badge.width = bw
-        row.badge.text = it.badge
+        row.badge.text = badge
         row.badge.visible = true
         tx = tx + bw + 18
     else
@@ -606,9 +607,9 @@ sub paintRow(r as Integer, it as Object, selected as Boolean)
     rightX = 1160
     ' title (natural width, capped), then the subtitle right after it; the width is measured once per item
     if it.tw = invalid then
-        m.measLbl.text = it.title
+        m.measLbl.text = plainText(it.title)
         tw = m.measLbl.boundingRect().width
-        if tw <= 0 then tw = Len(it.title) * 17
+        if tw <= 0 then tw = Len(m.measLbl.text) * 17
         it.tw = tw
     end if
     tw = it.tw
@@ -624,7 +625,7 @@ sub paintRow(r as Integer, it as Object, selected as Boolean)
     else
         tl.width = 0
     end if
-    tl.text = it.title
+    tl.text = plainText(it.title)
     tl.visible = true
 
     showSub = false
@@ -635,7 +636,7 @@ sub paintRow(r as Integer, it as Object, selected as Boolean)
             row.subt.translation = [sx, y]
             row.subt.width = sw
             row.subt.color = sc
-            row.subt.text = Chr(183) + " " + it.subt
+            row.subt.text = plainText(Chr(183) + " " + it.subt)
             showSub = true
         end if
     end if
@@ -643,7 +644,7 @@ sub paintRow(r as Integer, it as Object, selected as Boolean)
 
     if it.right <> "" then
         row.right.color = rc
-        row.right.text = it.right
+        row.right.text = plainText(it.right)
         row.right.visible = true
     else
         row.right.visible = false

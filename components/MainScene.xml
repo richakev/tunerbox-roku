@@ -26,6 +26,7 @@
     <OnDemandView id="od" visible="false" />
     <HomeView id="home" visible="false" />
     <MenuView id="menu" visible="false" />
+    <JumpPad id="jump" visible="false" />
 
     <Group id="statusGroup" visible="true">
       <!-- oversized so it still covers the whole screen when scaled into the safe area -->
