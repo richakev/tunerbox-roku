@@ -245,6 +245,8 @@ sub fillBanner(info as Object)
     m.subLbl.text = parts.Join(sep)
     m.nextLbl.translation = [x, 186]
     m.nextLbl.width = 1760 - m.inX - x
+    ' a channel's catch-up flag goes on that line when it has no key hints
+    if hint = "" and info.flag <> invalid then hint = info.flag
     m.nextLbl.text = hint
 
     hasTimes = (info.times <> "")

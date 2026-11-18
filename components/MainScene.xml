@@ -14,6 +14,11 @@
     <Rectangle id="bg" width="1920" height="1080" color="0x000000FF" />
     <Video id="video" translation="[0,0]" width="1920" height="1080" enableUI="false" enableTrickPlay="false" />
     <GuideView id="guide" visible="false" />
+    <!-- On Demand subtitles (library titles): timed lines from TunerBox, drawn over the picture -->
+    <Group id="subs" visible="false">
+      <Rectangle id="subsBg" color="0x000000B0" />
+      <Label id="subsLbl" horizAlign="center" wrap="true" color="0xFFFFFFFF" font="font:MediumBoldSystemFont" />
+    </Group>
     <PlayerHud id="hud" visible="false" />
     <SportsView id="sports" visible="false" />
     <StatsView id="stats" visible="false" />
@@ -55,5 +60,6 @@
     <Timer id="vodTimer" duration="1" repeat="true" />
     <Timer id="seekTimer" duration="0.6" repeat="false" />
     <Timer id="parkTimer" duration="60" repeat="false" />
+    <Timer id="subsTimer" duration="0.25" repeat="true" />
   </children>
 </component>

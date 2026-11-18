@@ -54,6 +54,8 @@ sub init()
     m.winStart = 0
     m.minT = 0
     m.maxT = 0
+    m.cuDays = {}           ' catch-up days by channel number (TunerBox /api/catchup)
+    m.cuMax = 0
     m.dataMax = 0
     m.jumpBuf = ""
     m.fCell = invalid
@@ -177,6 +179,28 @@ sub onGuideData()
     end if
 end sub
 
+sub onCuDays()
+    m.cuDays = m.top.cuDays
+    if m.cuDays = invalid then m.cuDays = {}
+    m.cuMax = 0
+    for each k in m.cuDays
+        d = Int(numv(m.cuDays[k]))
+        if d > m.cuMax then m.cuMax = d
+    end for
+    if m.top.visible then m.minT = earliestT()
+end sub
+
+' how far back the guide goes: now, or as far as the longest catch-up archive
+function earliestT() as Integer
+    t = nowEpoch()
+    if m.cuMax > 0 then return floor30(t - m.cuMax * 86400)
+    return floor30(t)
+end function
+
+function hasCatchup(ch as Object) as Boolean
+    return Int(numv(m.cuDays[ch.numStr])) > 0
+end function
+
 sub onFavs()
     m.favSet = m.top.favs
     if m.favSet = invalid then m.favSet = {}
@@ -219,7 +243,7 @@ sub openGuide(info as Object)
     m.pick = false
 
     t = nowEpoch()
-    m.minT = floor30(t)
+    m.minT = earliestT()
     m.maxT = m.dataMax
     if m.maxT < t + 6 * 3600 then m.maxT = t + 6 * 3600
     m.focusT = t
@@ -525,6 +549,8 @@ sub moveTime(dir as Integer)
     m.focusT = nt
     if nt < m.winStart or nt >= m.winStart + m.WIN then
         m.winStart = floor30(nt)
+        ' before the listings loaded at startup (they begin an hour ago): the scene fetches the archive's shows
+        if m.cuMax > 0 and m.winStart < nowEpoch() - 3600 then m.top.pastRequest = m.winStart
         ' other hours: the channels showing the category change too
         if m.genre <> "" then refilter(false) else redraw()
     else
@@ -542,7 +568,9 @@ sub activate(forceOptions as Boolean)
     c = m.fCell
     t = nowEpoch()
     isNow = (c.start <= t and c.stop > t)
-    if forceOptions or (not isNow and c.prog <> invalid) then
+    ' on a channel with catch-up, the show on now can be started over: OK asks, as for other shows
+    cuNow = (isNow and c.prog <> invalid and hasCatchup(m.chs[ci]))
+    if forceOptions or cuNow or (not isNow and c.prog <> invalid) then
         req = { chIdx: ci, current: isNow }
         if c.prog <> invalid then req.prog = c.prog
         m.top.optionsRequest = req

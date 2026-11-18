@@ -142,6 +142,15 @@ function numv(v as Dynamic) as Float
     return 0
 end function
 
+' a time (seconds since 1970) from JSON, exactly: numv's Float would round it by up to a minute
+function epochOf(v as Dynamic) as Integer
+    if v = invalid then return 0
+    if GetInterface(v, "ifString") <> invalid then return Int(Val(v, 10))
+    if GetInterface(v, "ifInt") <> invalid then return v
+    if GetInterface(v, "ifLongInt") <> invalid or GetInterface(v, "ifDouble") <> invalid or GetInterface(v, "ifFloat") <> invalid then return Int(v)
+    return 0
+end function
+
 ' JSON true / non-zero number (TunerBox sends some flags as 0/1) -> true; anything else -> false
 function truthy(v as Dynamic) as Boolean
     if v = invalid then return false

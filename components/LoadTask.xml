@@ -24,6 +24,8 @@
     <field id="apiBody" type="string" />
     <!-- "DELETE" sends a DELETE to apiPath instead -->
     <field id="apiMethod" type="string" />
+    <!-- how long a GET may take, in ms (0: 30 s); subtitles read from a film the first time take longer -->
+    <field id="apiTimeout" type="integer" value="0" />
     <field id="apiTag" type="string" />
     <field id="apiCtx" type="assocarray" />
     <field id="favOn" type="boolean" value="true" />

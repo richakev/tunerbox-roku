@@ -636,7 +636,9 @@ sub callApi()
     else if m.top.apiBody <> "" then
         txt = postText(url, m.top.apiBody, 15000)
     else
-        txt = fetchText(url, 30000)
+        ms = m.top.apiTimeout
+        if ms <= 0 then ms = 30000
+        txt = fetchText(url, ms)
     end if
     if txt <> "" then
         d = ParseJson(txt)

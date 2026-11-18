@@ -10,6 +10,10 @@
     <field id="tuneRequest" type="integer" alwaysNotify="true" />
     <field id="previewRequest" type="integer" alwaysNotify="true" />
     <field id="optionsRequest" type="assocarray" alwaysNotify="true" />
+    <!-- catch-up: { "<channel number>": days } from TunerBox; the guide then goes back that far -->
+    <field id="cuDays" type="assocarray" onChange="onCuDays" />
+    <!-- the guide moved to a time before the listings it has (catch-up): the scene loads from there -->
+    <field id="pastRequest" type="integer" alwaysNotify="true" />
     <field id="menuRequest" type="string" alwaysNotify="true" />
     <field id="exitRequest" type="boolean" alwaysNotify="true" />
     <!-- a short message for the scene to show as a toast (category filter results) -->

@@ -39,9 +39,17 @@ sub init()
     m.vod = invalid
     m.vodSeq = 0
     m.vodTasks = []
+    m.cuDays = {}           ' catch-up: { "<channel number>": days of archive } (TunerBox /api/catchup)
+    m.cuFrom = 0            ' the guide's listings go back to here (0: as loaded, an hour ago)
     m.vodTimer = m.top.findNode("vodTimer")
     m.seekTimer = m.top.findNode("seekTimer")
     m.parkTimer = m.top.findNode("parkTimer")
+    m.subsTimer = m.top.findNode("subsTimer")
+    m.subsTimer.observeField("fire", "subsTick")
+    m.subs = m.top.findNode("subs")
+    m.subsBg = m.top.findNode("subsBg")
+    m.subsLbl = m.top.findNode("subsLbl")
+    m.subsLbl.font.size = 44
     m.searchFrom = ""
     m.svod = invalid        ' the On Demand title whose play menu is open over Search or Home
     m.svodSeq = 0
@@ -93,6 +101,7 @@ sub init()
     m.guide.observeField("tuneRequest", "onGuideTune")
     m.guide.observeField("previewRequest", "onGuidePreview")
     m.guide.observeField("optionsRequest", "onGuideOptions")
+    m.guide.observeField("pastRequest", "onGuidePast")
     m.guide.observeField("menuRequest", "onGuideMenu")
     m.guide.observeField("exitRequest", "onGuideExit")
     m.guide.observeField("notice", "onGuideNotice")
@@ -385,6 +394,7 @@ function applyGuide(guideByNum as Object) as Integer
         end if
     end for
     m.epgCount = n
+    m.cuFrom = 0
     m.guide.guideData = idxGuide
     return n
 end function
@@ -825,6 +835,9 @@ function bannerInfo(ch as Object) as Object
             info.subtitle = "No guide data"
         end if
     end if
+    ' catch-up: on the line under the times (as the web banner's CATCH-UP flag)
+    d = cuDaysOf(ch.numStr)
+    if d > 0 then info.flag = "CATCH-UP " + cuDaysText(d) + "   " + Chr(183) + "   More > Start this show over, or earlier shows in the Guide"
     return info
 end function
 
@@ -959,6 +972,12 @@ end sub
 sub hudAction(id as String)
     if id = "more" then
         showMore()
+    else if id = "startover" then
+        m.hud.callFunc("hideAll")
+        if m.curIdx >= 0 and m.extern = invalid then
+            ch = m.channels[m.curIdx]
+            playCatchup(ch.numStr, progAt(ch, nowEpoch()))
+        end if
     else if id = "record" then
         m.hud.callFunc("hideAll")
         if m.curIdx >= 0 and m.extern = invalid then dvrRecord(m.curIdx, progAt(m.channels[m.curIdx], nowEpoch()))
@@ -1013,6 +1032,13 @@ sub showMore()
     actions.Push("favs")
     buttons.Push("Last channel")
     actions.Push("last")
+    if m.extern = invalid and m.curIdx >= 0 then
+        ch = m.channels[m.curIdx]
+        if cuAvailable(ch.numStr, progAt(ch, nowEpoch())) then
+            buttons.Push("Start this show over")
+            actions.Push("startover")
+        end if
+    end if
     if m.extern = invalid and m.curIdx >= 0 and m.dvrOn then
         buttons.Push("Record this show")
         actions.Push("record")
@@ -1102,9 +1128,21 @@ sub onGuideOptions()
     buttons = ["Watch channel"]
     actions = ["watch"]
     if req.prog <> invalid then
-        title = req.prog.title
-        msg = [fmtDay(req.prog.start) + "  " + fmtClock(req.prog.start) + dashSep() + fmtClock(req.prog.stop), ch.numStr + " " + ch.name]
-        if m.dvrOn then
+        p = req.prog
+        t = nowEpoch()
+        title = p.title
+        msg = [fmtDay(p.start) + "  " + fmtClock(p.start) + dashSep() + fmtClock(p.stop), ch.numStr + " " + ch.name]
+        ended = (p.stop <= t)
+        if cuAvailable(ch.numStr, p) then
+            ' from the channel's archive, in the On Demand player
+            if ended then buttons.Unshift("Watch (catch-up)") else buttons.Push("Start over (from the beginning)")
+            if ended then actions.Unshift("catchup") else actions.Push("catchup")
+        else if ended then
+            gone = "This show has ended"
+            if cuDaysOf(ch.numStr) > 0 then gone = gone + " and is no longer in the channel's archive"
+            msg.Push(gone)
+        end if
+        if m.dvrOn and not ended then
             buttons.Push("Record")
             actions.Push("record")
         end if
@@ -1897,6 +1935,8 @@ sub onDlgButton()
     else if kind = "opts" then
         if action = "watch" then
             onGuideTuneIdx(m.optReq.chIdx)
+        else if action = "catchup" then
+            playCatchup(m.channels[m.optReq.chIdx].numStr, m.optReq.prog)
         else if action = "record" then
             dvrRecord(m.optReq.chIdx, m.optReq.prog)
         else if action = "jump" then
@@ -1941,6 +1981,20 @@ sub onDlgButton()
         if action = "ok" and txt.Trim() <> "" and m.mode = "ondemand" then m.od.searchText = txt.Trim()
     else if kind = "vodnext" then
         vodNextAction(action)
+    else if kind = "vodav" then
+        if action = "audio" then
+            avAudioMenu()
+        else if action = "subs" then
+            avSubsMenu()
+        end if
+    else if kind = "vodaudio" then
+        if Left(action, 1) = "a" then avPickAudio(Int(Val(Mid(action, 2))))
+    else if kind = "vodsubs" then
+        if action = "off" then
+            avSubsOff()
+        else if Left(action, 1) = "s" then
+            avPickSub(Int(Val(Mid(action, 2))))
+        end if
     else if kind = "hvod" or kind = "hrec" or kind = "hsched" then
         it = m.homeReq
         m.homeReq = invalid
@@ -2491,6 +2545,7 @@ sub vodApi(tag as String, path as String, body as Dynamic, ctx as Object)
     t.mode = "api"
     t.baseUrl = m.base
     t.apiPath = path
+    if tag = "vodsubs" then t.apiTimeout = 150000
     if body <> invalid then t.apiBody = FormatJson(body)
     t.apiTag = tag
     t.apiCtx = ctx
@@ -2502,7 +2557,15 @@ end sub
 
 sub onVodApi(event as Object)
     r = event.getData()
-    if r = invalid or r.tag <> "vodplay" then return
+    if r = invalid then return
+    if r.tag = "vodtracks" then
+        gotTracks(r)
+        return
+    else if r.tag = "vodsubs" then
+        gotSubs(r)
+        return
+    end if
+    if r.tag <> "vodplay" then return
     ctx = r.ctx
     if ctx.seq <> m.vodSeq then return
     if not r.ok or r.data = invalid then
@@ -2531,6 +2594,376 @@ function vodSearchRow(v as Object) as Object
     ln = fmtLen(numv(v.duration))
     if kind <> "series" and ln <> "" then right = right + dotSep() + ln
     return { k: "vod", badge: badge, num: "", name: "", title: plainText(anyStr(v.name)), sub: plainText(sb), right: right, start: 0, stop: 0, v: v }
+end function
+
+' ============================================================ audio tracks and subtitles
+' Titles from your own libraries (TunerBox /api/vod/tracks): * while one plays picks the audio track (the
+' stream restarts at the same spot with &a=) or subtitles (timed lines from /api/vod/subs, drawn here over the
+' picture by the title's position, so they stay in step after a skip). The choice is kept per movie or show
+' (an episode picks the same language as the last one), for the 40 titles played most recently.
+function avKey(it as Object) as String
+    k = anyStr(it.title_id)
+    if k = "" then k = anyStr(it.id)
+    return k
+end function
+
+function avAll() as Object
+    d = invalid
+    txt = regRead("avPrefs", "")
+    if txt <> "" then d = ParseJson(txt)
+    if Type(d) <> "roAssociativeArray" then d = {}
+    if Type(d.order) <> "roArray" then d.order = []
+    if Type(d.t) <> "roAssociativeArray" then d.t = {}
+    return d
+end function
+
+' before the first stream: the audio track (and subtitles) picked last time for this movie or show
+sub avInit(v as Object)
+    p = avAll().t[avKey(v.it)]
+    if Type(p) <> "roAssociativeArray" then return
+    v.audio = Int(numv(p.a))
+    if Type(p.s) = "roAssociativeArray" then v.subPick = p.s
+end sub
+
+sub avSave(v as Object)
+    if v.cu then return
+    s = invalid
+    if v.sub <> invalid then s = { label: anyStr(v.sub.label), lang: anyStr(v.sub.lang), forced: truthy(v.sub.forced) }
+    d = avAll()
+    k = avKey(v.it)
+    d.t[k] = { a: v.audio, s: s }
+    order = []
+    for each x in d.order
+        if x <> k then order.Push(x)
+    end for
+    order.Push(k)
+    while order.Count() > 40
+        d.t.Delete(order.Shift())
+    end while
+    d.order = order
+    regWrite("avPrefs", FormatJson(d))
+end sub
+
+function avHas(v as Dynamic) as Boolean
+    if v = invalid or v.tracks = invalid then return false
+    return v.tracks.audio.Count() > 1 or v.tracks.subs.Count() > 0
+end function
+
+function avAudioLabel(v as Object) as String
+    for each a in v.tracks.audio
+        if Int(numv(a.n)) = v.audio then return anyStr(a.label)
+    end for
+    return ""
+end function
+
+' GET /api/vod/tracks: { audio: [{ n, label }], subs: [{ id, label, lang, forced, picture }] } (empty for playlist titles)
+sub gotTracks(r as Object)
+    v = m.vod
+    if v = invalid or r.ctx = invalid or r.ctx.seq <> m.vodSeq then return
+    d = r.data
+    if not r.ok or Type(d) <> "roAssociativeArray" or Type(d.audio) <> "roArray" or Type(d.subs) <> "roArray" then return
+    v.tracks = d
+    if v.audio > 0 and v.audio >= d.audio.Count() then
+        ' this episode has fewer tracks than the one the choice was made on
+        v.audio = 0
+        vodStart(vodPos())
+    end if
+    p = v.subPick
+    if p <> invalid then
+        s = invalid
+        for each x in d.subs
+            if not truthy(x.picture) and anyStr(x.label) = anyStr(p.label) then
+                s = x
+                exit for
+            end if
+        end for
+        if s = invalid and anyStr(p.lang) <> "" then
+            for each x in d.subs
+                if not truthy(x.picture) and anyStr(x.lang) = anyStr(p.lang) and truthy(x.forced) = truthy(p.forced) then
+                    s = x
+                    exit for
+                end if
+            end for
+        end if
+        if s <> invalid then subsOn(s, true)
+    end if
+end sub
+
+sub avMenu()
+    v = m.vod
+    if not avHas(v) then return
+    buttons = []
+    actions = []
+    if v.tracks.audio.Count() > 1 then
+        buttons.Push("Audio: " + plainText(avAudioLabel(v)))
+        actions.Push("audio")
+    end if
+    if v.tracks.subs.Count() > 0 then
+        sl = "Off"
+        if v.sub <> invalid then sl = anyStr(v.sub.label)
+        buttons.Push("Subtitles: " + plainText(sl))
+        actions.Push("subs")
+    end if
+    buttons.Push("Close")
+    actions.Push("close")
+    showDialog("vodav", plainText(anyStr(v.it.title)), ["This title"], buttons, actions)
+end sub
+
+sub avAudioMenu()
+    v = m.vod
+    if v = invalid or v.tracks = invalid then return
+    buttons = []
+    actions = []
+    for each a in v.tracks.audio
+        n = Int(numv(a.n))
+        lbl = plainText(anyStr(a.label))
+        if n = v.audio then lbl = lbl + "   (playing)"
+        buttons.Push(lbl)
+        actions.Push("a" + n.ToStr())
+    end for
+    showDialog("vodaudio", "Audio", [plainText(anyStr(v.it.title))], buttons, actions)
+end sub
+
+sub avPickAudio(n as Integer)
+    v = m.vod
+    if v = invalid or v.tracks = invalid or n = v.audio then return
+    v.audio = n
+    avSave(v)
+    showToast("Audio: " + plainText(avAudioLabel(v)))
+    vodStart(vodPos())          ' the same spot, with that track
+end sub
+
+sub avSubsMenu()
+    v = m.vod
+    if v = invalid or v.tracks = invalid then return
+    cur = ""
+    if v.sub <> invalid then cur = anyStr(v.sub.id)
+    lbl = "Off"
+    if cur = "" then lbl = "Off   (on)"
+    buttons = [lbl]
+    actions = ["off"]
+    for i = 0 to v.tracks.subs.Count() - 1
+        s = v.tracks.subs[i]
+        lbl = plainText(anyStr(s.label))
+        if truthy(s.picture) then
+            lbl = lbl + " (picture subtitles: not available yet)"
+        else if anyStr(s.id) = cur then
+            lbl = lbl + "   (on)"
+        end if
+        buttons.Push(lbl)
+        actions.Push("s" + i.ToStr())
+    end for
+    showDialog("vodsubs", "Subtitles", [plainText(anyStr(v.it.title))], buttons, actions)
+end sub
+
+sub avPickSub(i as Integer)
+    v = m.vod
+    if v = invalid or v.tracks = invalid or i < 0 or i >= v.tracks.subs.Count() then return
+    s = v.tracks.subs[i]
+    if truthy(s.picture) then
+        showToast("Picture subtitles (PGS, VobSub) can't be shown yet. Pick a text track if there is one.")
+        return
+    end if
+    subsOn(s, false)
+    avSave(v)
+end sub
+
+sub avSubsOff()
+    v = m.vod
+    if v = invalid then return
+    v.sub = invalid
+    v.cues = invalid
+    m.subsTimer.control = "stop"
+    subsShow("")
+    avSave(v)
+end sub
+
+sub subsOn(s as Object, quiet as Boolean)
+    v = m.vod
+    v.sub = s
+    v.cues = invalid
+    subsShow("")
+    if not quiet then showToast("Loading subtitles... (the first time takes a minute for a long film)")
+    vodApi("vodsubs", "/api/vod/subs/" + urlEncode(v.id) + "/" + urlEncode(anyStr(s.id)), invalid, { seq: m.vodSeq, sid: anyStr(s.id), quiet: quiet })
+end sub
+
+' GET /api/vod/subs: { cues: [[start, end, text]] } (seconds into the title)
+sub gotSubs(r as Object)
+    v = m.vod
+    if v = invalid or r.ctx = invalid or r.ctx.seq <> m.vodSeq or v.sub = invalid or anyStr(v.sub.id) <> r.ctx.sid then return
+    d = r.data
+    if not r.ok or Type(d) <> "roAssociativeArray" or Type(d.cues) <> "roArray" then
+        v.sub = invalid
+        if not r.ctx.quiet then
+            why = ""
+            if Type(d) = "roAssociativeArray" and d.detail <> invalid then why = ": " + anyStr(d.detail)
+            showToast("Can't show those subtitles" + why)
+        end if
+        return
+    end if
+    v.cues = d.cues
+    if not r.ctx.quiet then showToast("Subtitles: " + plainText(anyStr(v.sub.label)))
+    m.subsTimer.control = "start"
+    subsTick()
+end sub
+
+' the lines on screen at the title's position (several when they overlap)
+sub subsTick()
+    v = m.vod
+    txt = ""
+    if v <> invalid and v.cues <> invalid and m.mode = "vod" and v.target < 0 and not v.parked and not v.done then
+        c = v.cues
+        t = vodPos()
+        lo = 0
+        hi = c.Count() - 1
+        i = -1
+        while lo <= hi
+            mid = Int((lo + hi) / 2)
+            if numv(c[mid][0]) <= t then
+                i = mid
+                lo = mid + 1
+            else
+                hi = mid - 1
+            end if
+        end while
+        lines = []
+        j = i
+        while j >= 0 and j > i - 6
+            if numv(c[j][1]) > t then lines.Unshift(anyStr(c[j][2]))
+            j = j - 1
+        end while
+        txt = lines.Join(Chr(10))
+        txt = txt.Replace("<i>", "")
+        txt = txt.Replace("</i>", "")
+    end if
+    subsShow(txt)
+end sub
+
+sub subsShow(txt as String)
+    if txt = "" then
+        if m.subs.visible then m.subs.visible = false
+        return
+    end if
+    if m.subs.visible and m.subsLbl.text = txt then return
+    ' as wide as the longest line (up to 1500, then it wraps), centred, with a dark box behind it
+    lbl = m.subsLbl
+    lbl.wrap = false
+    lbl.width = 0
+    w = 0
+    for each ln in txt.Split(Chr(10))
+        lbl.text = ln
+        lw = Int(lbl.boundingRect().width)
+        if lw > w then w = lw
+    end for
+    if w > 1500 then w = 1500
+    if w < 40 then w = 40
+    lbl.width = w + 4
+    lbl.wrap = true
+    lbl.text = txt
+    h = Int(lbl.boundingRect().height)
+    y = 1000 - h
+    x = 960 - Int(w / 2)
+    lbl.translation = [x - 2, y]
+    m.subsBg.translation = [x - 20, y - 8]
+    m.subsBg.width = w + 40
+    m.subsBg.height = h + 16
+    m.subs.visible = true
+end sub
+
+' ============================================================ catch-up TV
+' A channel whose playlist keeps an archive can play shows that already aired, and the one on now from the
+' beginning. They play in the On Demand player as the title "cu-<channel>-<start>" (TunerBox catchup.py).
+function cuDaysOf(num as String) as Integer
+    if m.cuDays = invalid then return 0
+    return Int(numv(m.cuDays[num]))
+end function
+
+function cuDaysText(d as Integer) as String
+    if d = 1 then return "1 DAY"
+    return d.ToStr() + " DAYS"
+end function
+
+' is this show in the channel's archive? (started at least a minute ago, and not too long ago)
+function cuAvailable(num as String, p as Dynamic) as Boolean
+    if p = invalid then return false
+    d = cuDaysOf(num)
+    t = nowEpoch()
+    st = epochOf(p.start)
+    return d > 0 and st <= t - 60 and st >= t - d * 86400
+end function
+
+sub playCatchup(num as String, p as Dynamic)
+    if not cuAvailable(num, p) then
+        if cuDaysOf(num) > 0 then
+            showToast("That show is no longer in the channel's archive")
+        else
+            showToast("Channel " + num + " has no catch-up")
+        end if
+        return
+    end if
+    st = epochOf(p.start)
+    playVod("cu-" + num + "-" + st.ToStr(), 0, false)
+end sub
+
+' the guide went back before the listings it has: load the catch-up channels' shows from there (a few hours
+' at a time, so a provider with archives on hundreds of channels stays a small download)
+sub onGuidePast()
+    t0 = m.guide.pastRequest
+    if m.cuFrom = 0 then m.cuFrom = nowEpoch() - 3600
+    if t0 >= m.cuFrom or m.cuDays = invalid or m.cuDays.Count() = 0 then return
+    nums = []
+    for each k in m.cuDays
+        nums.Push(k)
+    end for
+    stopAt = m.cuFrom
+    fromAt = t0 - 3 * 3600
+    m.cuFrom = fromAt
+    homeApi("cuguide", "/api/guide?start=" + fromAt.ToStr() + "&stop=" + stopAt.ToStr() + "&numbers=" + nums.Join(","), "", invalid, { fromAt: fromAt, stopAt: stopAt })
+end sub
+
+' GET /api/guide: { "<number>": [{ start, stop, title, subtitle, descr, category, episode, rating }] }
+sub gotPastGuide(r as Object)
+    if not r.ok or Type(r.data) <> "roAssociativeArray" or r.data.detail <> invalid then
+        if m.cuFrom = r.ctx.fromAt then m.cuFrom = r.ctx.stopAt      ' try again next time
+        return
+    end if
+    out = {}
+    for i = 0 to m.channels.Count() - 1
+        ch = m.channels[i]
+        list = r.data[ch.numStr]
+        if Type(list) = "roArray" and list.Count() > 0 then
+            add = []
+            for each p in list
+                if Type(p) = "roAssociativeArray" then
+                    add.Push({ start: epochOf(p.start), stop: epochOf(p.stop), title: anyStr(p.title), subtitle: anyStr(p.subtitle), desc: anyStr(p.descr), cat: anyStr(p.category), ep: anyStr(p.episode), rating: anyStr(p.rating) })
+                end if
+            end for
+            merged = mergeProgs(ch.programs, add)
+            ch.programs = merged
+            out[i.ToStr()] = merged
+        end if
+    end for
+    if out.Count() > 0 then m.guide.guideData = out
+end sub
+
+' a channel's shows with earlier ones added (one per start time), in time order
+function mergeProgs(have as Dynamic, add as Object) as Object
+    seen = {}
+    out = []
+    if Type(have) = "roArray" then
+        for each p in have
+            seen[p.start.ToStr()] = true
+            out.Push(p)
+        end for
+    end if
+    for each p in add
+        if seen[p.start.ToStr()] = invalid then
+            seen[p.start.ToStr()] = true
+            out.Push(p)
+        end if
+    end for
+    out.SortBy("start")
+    return out
 end function
 
 ' ============================================================ On Demand playback
@@ -2582,10 +3015,19 @@ sub startVod(it as Object, start as Float, back as Boolean)
     setPreviewSize(false)
     m.mode = "vod"
     m.top.setFocus(true)
-    m.vod = { it: it, id: anyStr(it.id), dur: numv(it.duration), base: start, back: back, retries: 0, target: -1.0, paused: false, parked: false, done: false, acc: 0.0, running: false, clock: CreateObject("roTimespan"), ticks: 0 }
-    if start > 0 then showToast("Resuming from " + fmtDur(start)) else showToast(anyStr(it.title))
+    cu = truthy(it.catchup)
+    m.vod = { it: it, id: anyStr(it.id), dur: numv(it.duration), base: start, back: back, retries: 0, target: -1.0, paused: false, parked: false, done: false, acc: 0.0, running: false, clock: CreateObject("roTimespan"), ticks: 0, cu: cu, audio: 0, tracks: invalid, sub: invalid, subPick: invalid, cues: invalid }
+    if not cu then avInit(m.vod)
+    if start > 0 then
+        showToast("Resuming from " + fmtDur(start))
+    else if cu then
+        showToast("Catch-up: " + anyStr(it.title))
+    else
+        showToast(anyStr(it.title))
+    end if
     vodStart(start)
     m.vodTimer.control = "start"
+    if not cu then vodApi("vodtracks", "/api/vod/tracks/" + urlEncode(m.vod.id), invalid, { seq: m.vodSeq })
 end sub
 
 sub vodStart(at as Float)
@@ -2596,6 +3038,7 @@ sub vodStart(at as Float)
     m.retryTimer.control = "stop"
     if v.dur > 0 and at > v.dur - 5 then at = v.dur - 5
     if at < 0 then at = 0
+    if v.cu then at = Int(at / 60) * 60       ' the archive starts on the minute
     v.base = at
     v.target = -1.0
     v.parked = false
@@ -2604,6 +3047,7 @@ sub vodStart(at as Float)
     v.running = false
     u = m.base + "/api/vod/stream/" + urlEncode(v.id) + "?ss=" + Int(at).ToStr() + "&client=" + urlEncode(vodClientId()) + "&name=" + urlEncode(deviceName())
     if isCompat() then u = u + "&mode=roku720"
+    if v.audio > 0 then u = u + "&a=" + v.audio.ToStr()
     c = CreateObject("roSGNode", "ContentNode")
     c.url = u
     c.title = anyStr(v.it.title)
@@ -2682,7 +3126,8 @@ sub vodFinish()
     v.base = v.dur
     v.parked = true
     m.vodTimer.control = "stop"
-    vodApi("watched", "/api/vod/watched", { id: v.id, watched: true }, {})
+    subsShow("")
+    if not v.cu then vodApi("watched", "/api/vod/watched", { id: v.id, watched: true }, {})
     m.video.control = "stop"
     m.hud.callFunc("hideAll")
     nx = v.it["next"]
@@ -2707,7 +3152,7 @@ end sub
 
 sub vodSave()
     v = m.vod
-    if v = invalid or v.done then return
+    if v = invalid or v.done or v.cu then return       ' catch-up shows aren't resumed later
     playPos = vodPos()
     if playPos < 5 then return
     vodApi("progress", "/api/vod/progress", { id: v.id, position: playPos, duration: v.dur }, {})
@@ -2720,6 +3165,8 @@ sub vodLeave()
     m.seekTimer.control = "stop"
     m.parkTimer.control = "stop"
     m.retryTimer.control = "stop"
+    m.subsTimer.control = "stop"
+    subsShow("")
     m.vod = invalid
     m.hud.callFunc("hideAll")
 end sub
@@ -2778,9 +3225,20 @@ end sub
 sub vodSeek(delta as Float)
     v = m.vod
     if v.done then return
+    if v.cu then
+        jump = Abs(delta)
+        if jump < 60 then jump = 60
+        if delta < 0 then jump = -jump
+        delta = jump
+    end if
     t = vodPos() + delta
     if v.dur > 0 and t > v.dur - 10 then t = v.dur - 10
+    if v.cu and epochOf(v.it.stop) > nowEpoch() then
+        lim = nowEpoch() - epochOf(v.it.start) - 90
+        if t > lim then t = lim
+    end if
     if t < 0 then t = 0
+    if v.cu then t = Int(t / 60) * 60
     v.target = t
     showVodHud()
     ' several presses = one jump
@@ -2829,7 +3287,14 @@ function vodInfo() as Object
         badge = "LOADING"
     end if
     hint = "Left -10s   Right +30s   Rew/FF 5 min   OK Pause   Back Stop"
-    return { num: "VOD", name: "On Demand", logo: "", title: plainText(anyStr(v.it.title)), subtitle: plainText(anyStr(v.it["sub"])), times: times, pct: pct, nextText: hint, rating: badge }
+    name = "On Demand"
+    if v.cu then
+        hint = "Left/Right 1 min   Rew/FF 5 min   OK Pause   Back Live TV"
+        name = "Catch-up"
+    else if avHas(v) then
+        hint = hint + "   * Audio & subtitles"
+    end if
+    return { num: "VOD", name: name, logo: "", title: plainText(anyStr(v.it.title)), subtitle: plainText(anyStr(v.it["sub"])), times: times, pct: pct, nextText: hint, rating: badge }
 end function
 
 sub showVodHud()
@@ -2860,7 +3325,9 @@ function vodKey(key as String) as Boolean
         vodSeek(-300)
     else if key = "fastforward" then
         vodSeek(300)
-    else if key = "up" or key = "down" or key = "options" then
+    else if key = "options" then
+        if avHas(v) then avMenu() else showVodHud()
+    else if key = "up" or key = "down" then
         showVodHud()
     else if key = "back" then
         vodStop(v.back)
@@ -2899,6 +3366,7 @@ end sub
 
 sub fetchSettings()
     homeApi("settings", "/api/settings", "", invalid, {})
+    homeApi("catchup", "/api/catchup", "", invalid, {})
 end sub
 
 ' small call to TunerBox for Home (results come back in onHomeApi)
@@ -2926,6 +3394,14 @@ sub onHomeApi(event as Object)
     else if r.tag = "hchange" then
         if r.ok then showToast(r.ctx.ok) else showToast(r.ctx.fail)
         if m.mode = "home" then m.home.callFunc("reload")
+    else if r.tag = "catchup" then
+        ' an older TunerBox has no /api/catchup: no catch-up
+        if r.ok and Type(r.data) = "roAssociativeArray" and r.data.detail = invalid then
+            m.cuDays = r.data
+            m.guide.cuDays = r.data
+        end if
+    else if r.tag = "cuguide" then
+        gotPastGuide(r)
     else if r.tag = "svod" then
         if r.ctx.seq <> m.svodSeq or m.mode <> r.ctx.mode then return
         if not r.ok or Type(r.data) <> "roAssociativeArray" or anyStr(r.data.id) = "" then
