@@ -44,6 +44,9 @@ sub init()
     m.previewTimer.observeField("fire", "onPreviewTimer")
     m.clockTimer.observeField("fire", "onClockTimer")
     m.jumpTimer.observeField("fire", "onJumpTimer")
+    m.holdTimer = m.top.findNode("holdTimer")
+    m.holdTimer.observeField("fire", "onHoldTimer")
+    m.holdKey = ""
 
     m.favSet = {}
     m.chs = []
@@ -168,6 +171,10 @@ end sub
 ' guide data arrives later from the background task: { "<channel index>": [programs] }
 sub onGuideData()
     data = m.top.guideData
+    if data = invalid or data.Count() = 0 then return
+    ' memory: the listings now live in m.chs; the field's copy of them is let go (the {} comes back here
+    ' and stops at the line above)
+    m.top.guideData = {}
     for each key in data.Keys()
         idx = Int(Val(key))
         if idx >= 0 and idx < m.chs.Count() then m.chs[idx].programs = data[key]
@@ -275,6 +282,7 @@ sub closeGuide()
     m.previewTimer.control = "stop"
     m.clockTimer.control = "stop"
     m.jumpTimer.control = "stop"
+    holdStop()
     ' forget everything about where the user was scrolling
     m.fCell = invalid
     m.fRow = invalid
@@ -540,8 +548,13 @@ end sub
 sub moveTime(dir as Integer)
     if m.fCell = invalid then return
     if dir < 0 then
-        nt = m.fCell.start - 1
-        if nt < m.minT then return
+        ' the show before this one, from its start (as Right goes to the next show's start). The cell's own
+        ' start is cut off at the left edge of the hours shown, so a long show would go back 30 min a step.
+        s = m.fCell.start
+        if m.fCell.prog <> invalid then s = m.fCell.prog.start
+        if s <= m.minT then return
+        nt = prevShowStart(s)
+        if nt < m.minT then nt = m.minT
     else
         nt = m.fCell.stop
         if nt >= m.maxT then return
@@ -557,6 +570,21 @@ sub moveTime(dir as Integer)
         applyFocus()
     end if
 end sub
+
+' on the focused channel: the start of the show that's on just before t. When nothing is listed then (a gap,
+' shown as "No Data"), where the gap starts: the end of the last show before it; t - 1 when there's none.
+function prevShowStart(t as Integer) as Integer
+    ch = m.chs[m.view[m.row]]
+    gapAt = 0
+    if ch <> invalid and ch.programs <> invalid then
+        for each p in ch.programs
+            if p.start < t and p.stop >= t then return p.start
+            if p.stop < t and p.stop > gapAt then gapAt = p.stop
+        end for
+    end if
+    if gapAt > 0 then return gapAt
+    return t - 1
+end function
 
 sub activate(forceOptions as Boolean)
     if not m.top.visible or m.fCell = invalid then return
@@ -619,8 +647,56 @@ sub commitJump()
     if buf <> "" then jumpToNumber(buf)
 end sub
 
+' ------------------------------------------------------------ arrows held
+' holding Up or Down keeps moving a channel at a time, Left or Right a show at a time (after a short pause,
+' so a tap is still one step)
+sub holdStart(key as String)
+    m.holdKey = key
+    m.holdTimer.control = "stop"
+    m.holdTimer.duration = 0.4
+    m.holdTimer.control = "start"
+end sub
+
+sub holdStop()
+    if m.holdKey = "" then return
+    m.holdKey = ""
+    m.holdTimer.control = "stop"
+end sub
+
+sub onHoldTimer()
+    if m.holdKey = "" or m.pick or not m.top.visible or m.fCell = invalid then
+        holdStop()
+        return
+    end if
+    sideways = (m.holdKey = "left" or m.holdKey = "right")
+    if m.holdTimer.duration > 0.3 then
+        ' a show a step is a little slower than a channel: it often moves the hours shown, a bigger redraw
+        m.holdTimer.control = "stop"
+        if sideways then m.holdTimer.duration = 0.18 else m.holdTimer.duration = 0.1
+        m.holdTimer.control = "start"
+    end if
+    if sideways then
+        ' stops at either end of the guide: as far back as catch-up goes, the last listings ahead
+        before = m.focusT
+        if m.holdKey = "left" then moveTime(-1) else moveTime(1)
+        if m.focusT = before then holdStop()
+        return
+    end if
+    before = m.row
+    ' held Up stops on the first channel (it doesn't carry on into the filter pills)
+    if m.holdKey = "up" then moveRow(-1) else moveRow(1)
+    if m.row = before then holdStop()
+end sub
+
 function onKeyEvent(key as String, press as Boolean) as Boolean
-    if not press then return false
+    if not press then
+        if m.holdKey <> "" and key = m.holdKey then
+            holdStop()
+            return true
+        end if
+        return false
+    end if
+    holdStop()
     if not m.top.visible or m.fCell = invalid then return false
     if m.pick then
         if key = "left" or key = "right" then
@@ -654,12 +730,16 @@ function onKeyEvent(key as String, press as Boolean) as Boolean
     end if
     if key = "left" then
         moveTime(-1)
+        holdStart("left")
     else if key = "right" then
         moveTime(1)
+        holdStart("right")
     else if key = "up" then
         moveRow(-1)
+        holdStart("up")
     else if key = "down" then
         moveRow(1)
+        holdStart("down")
     else if key = "rewind" or key = "pageup" then
         moveRow(0 - m.NROWS)
     else if key = "fastforward" or key = "pagedown" then

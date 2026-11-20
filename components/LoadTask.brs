@@ -11,6 +11,11 @@ sub loadData()
     mode = m.top.mode
     if mode = "guide" then
         loadGuide()
+    else if mode = "savedguide" then
+        t0 = CreateObject("roTimespan")
+        g = readGuideCache()
+        print "[TunerBox] saved guide read in " + t0.TotalMilliseconds().ToStr() + " ms"
+        m.top.result = { ok: true, guideOnly: true, guide: g }
     else if mode = "favs" then
         loadFavs()
     else if mode = "setfav" then
@@ -131,9 +136,13 @@ function readGuideCache() as Object
     txt = readCache("guide")
     if txt = "" then return invalid
     data = ParseJson(txt)
+    txt = ""     ' memory: the text goes once parsed, the parsed file once turned into the guide
     if data = invalid or data.programs = invalid then return invalid
+    progs = data.programs
+    data = invalid
     t = nowEpoch()
-    g = guideFromJson(data.programs, t - 3 * 3600, t + 48 * 3600)
+    g = guideFromJson(progs, t - 3 * 3600, t + 48 * 3600)
+    progs = invalid
     if g.Count() = 0 then return invalid
     return g
 end function
@@ -768,10 +777,9 @@ sub loadBoot()
             if data <> invalid and data.channels <> invalid and data.channels.Count() > 0 then
                 result.channels = rowsToChannels(data.channels)
                 result.fromCache = true
-                result.guide = readGuideCache()
                 result.ok = true
                 print "[TunerBox] cache: " + result.channels.Count().ToStr() + " channels in " + t0.TotalMilliseconds().ToStr() + " ms"
-                m.top.result = result
+                sendBoot(result)
                 return
             end if
         end if
@@ -783,10 +791,9 @@ sub loadBoot()
     if data <> invalid then
         result.channels = rowsToChannels(data.channels)
         data = invalid
-        result.guide = readGuideCache()
         result.ok = true
         print "[TunerBox] channels.json: " + result.channels.Count().ToStr() + " channels in " + t0.TotalMilliseconds().ToStr() + " ms"
-        m.top.result = result
+        sendBoot(result)
         return
     end if
 
@@ -808,42 +815,39 @@ sub loadBoot()
     channels = filterMapped(channels)
     writeCache("channels", FormatJson({ channels: channelsToRows(channels) }))
     result.channels = channels
-    result.guide = readGuideCache()
     result.ok = true
     print "[TunerBox] parsed " + channels.Count().ToStr() + " channels, " + t0.TotalMilliseconds().ToStr() + " ms total"
+    sendBoot(result)
+end sub
+
+' Just the channels, so the scene can open Home (or the banner) at once. The saved guide (24 hours of
+' listings: seconds of work on a slower Roku) is read by a "savedguide" task the scene starts once the
+' video is playing, so the two don't compete while the stream starts.
+sub sendBoot(result as Object)
     m.top.result = result
 end sub
 
 ' ============================================================ guide
+' Two passes, so the guide opens quickly but still reaches well ahead: the first asks for guideHours (12)
+' and hands it over; the second asks for guideMore (24) and hands that over too, replacing the first.
+' result.full is true on the answer that has everything (the scene only then counts the cache as fresh).
 sub loadGuide()
     t0 = CreateObject("roTimespan")
     base = m.top.baseUrl
     hours = m.top.guideHours
+    more = m.top.guideMore
     now = nowEpoch()
     tFrom = now - 3 * 3600
-    tTo = now + hours * 3600
-    result = { ok: false, guide: {}, count: 0, source: "" }
-    guide = invalid
+    result = { ok: false, guide: {}, count: 0, source: "", full: false }
 
     ' TunerBox's guide for the Roku (GET /guide.json, gzipped): only the hours shown and the channels with
     ' listings, read with the built-in JSON parser. An older TunerBox doesn't have it: epg.xml below.
     m.top.status = "Downloading guide..."
-    txt = fetchText(base + "/guide.json?hours=" + hours.ToStr(), 60000)
-    tDl = t0.TotalMilliseconds()
-    if txt <> "" then
-        data = ParseJson(txt)
-        if data <> invalid and Type(data.programs) = "roAssociativeArray" then
-            writeCache("guide", txt)
-            guide = guideFromJson(data.programs, tFrom, tTo)
-            result.source = "guide.json"
-        end if
-        data = invalid
-    end if
-    print "[TunerBox] guide.json: " + Len(txt).ToStr() + " chars, downloaded in " + tDl.ToStr() + " ms, ready in " + t0.TotalMilliseconds().ToStr() + " ms"
-    txt = ""
-
-    if guide = invalid then
-        guide = guideFromEpgXml(base, tFrom, tTo, t0)
+    guide = guideJson(base, hours, tFrom, t0)
+    if guide <> invalid then
+        result.source = "guide.json"
+    else
+        guide = guideFromEpgXml(base, tFrom, now + hours * 3600, t0)
         result.source = "epg.xml"
         if guide <> invalid and guide.Count() > 0 then
             writeCache("guide", FormatJson({ programs: progsToRows(guide) }))
@@ -855,8 +859,29 @@ sub loadGuide()
         result.count = guide.Count()
         result.ok = true
     end if
-    print "[TunerBox] guide ready (" + result.source + "): " + result.count.ToStr() + " channels, " + t0.TotalMilliseconds().ToStr() + " ms"
+    ' epg.xml (an older TunerBox) is downloaded whole each time: no second pass for that
+    result.full = (not result.ok or result.source <> "guide.json" or more <= hours)
+    print "[TunerBox] guide ready (" + result.source + ", " + hours.ToStr() + " h): " + result.count.ToStr() + " channels, " + t0.TotalMilliseconds().ToStr() + " ms"
+    full = result.full
     m.top.result = result
+    ' the first pass is with the scene now: let this thread's copy go before the second download
+    guide = invalid
+    result = invalid
+
+    ' ---- the second pass: the hours after those, while the guide is already usable
+    if not full then
+        t1 = CreateObject("roTimespan")
+        g2 = guideJson(base, more, tFrom, t1)
+        if g2 <> invalid and g2.Count() > 0 then
+            n2 = g2.Count()
+            print "[TunerBox] guide extended (" + more.ToStr() + " h): " + n2.ToStr() + " channels, " + t1.TotalMilliseconds().ToStr() + " ms"
+            res2 = { ok: true, guide: g2, count: n2, source: "guide.json", full: true }
+            g2 = invalid
+            m.top.result = res2
+            res2 = invalid
+        end if
+        g2 = invalid
+    end if
 
     ' ---- afterwards (result already delivered): refresh the channel cache for next launch
     if m.top.refreshCache then
@@ -874,6 +899,31 @@ sub loadGuide()
         print "[TunerBox] channel cache refreshed, " + t0.TotalMilliseconds().ToStr() + " ms"
     end if
 end sub
+
+' GET /guide.json for the next `hours` (from 3 hours ago), cached for next launch; invalid when it isn't there
+function guideJson(base as String, hours as Integer, tFrom as Integer, t0 as Object) as Dynamic
+    guide = invalid
+    txt = fetchText(base + "/guide.json?hours=" + hours.ToStr(), 60000)
+    tDl = t0.TotalMilliseconds()
+    chars = Len(txt)
+    if txt <> "" then
+        ' memory: each copy of the listings is several MB, so each is let go as soon as the next is made
+        ' (the text once parsed, the parsed reply once turned into the guide)
+        data = ParseJson(txt)
+        if data <> invalid and Type(data.programs) = "roAssociativeArray" then
+            writeCache("guide", txt)
+            txt = ""
+            progs = data.programs
+            data = invalid
+            guide = guideFromJson(progs, tFrom, nowEpoch() + hours * 3600)
+            progs = invalid
+        end if
+        data = invalid
+        txt = ""
+    end if
+    print "[TunerBox] guide.json (" + hours.ToStr() + " h): " + chars.ToStr() + " chars, downloaded in " + tDl.ToStr() + " ms, ready in " + t0.TotalMilliseconds().ToStr() + " ms"
+    return guide
+end function
 
 ' fallback: download + parse epg.xml here.  returns { numStr: [prog] }
 function guideFromEpgXml(base as String, tFrom as Integer, tTo as Integer, t0 as Object) as Object

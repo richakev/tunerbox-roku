@@ -3,13 +3,16 @@
   <script type="text/brightscript" uri="pkg:/components/LoadTask.brs" />
   <script type="text/brightscript" uri="pkg:/source/utils.brs" />
   <interface>
-    <!-- "search" = GET /api/search; "sports" / "sgroup" / "scheck" / "scheckstate" / "record" = Sports & Events + DVR; "espn" = ESPN scoreboards matched to the guide; "favs" = GET favorites, "setfav" = POST favorite; "boot" = channel list (cache -> sidecar -> M3U); "guide" = programme guide (background) -->
+    <!-- "search" = GET /api/search; "sports" / "sgroup" / "scheck" / "scheckstate" / "record" = Sports & Events + DVR; "espn" = ESPN scoreboards matched to the guide; "favs" = GET favorites, "setfav" = POST favorite; "boot" = channel list (cache -> sidecar -> M3U); "guide" = programme guide (background); "savedguide" = the guide saved on this Roku (result { guideOnly, guide }) -->
     <field id="mode" type="string" value="boot" />
     <field id="baseUrl" type="string" />
     <field id="useCache" type="boolean" value="true" />
     <field id="hideUnmapped" type="boolean" value="true" />
     <field id="refreshCache" type="boolean" value="false" />
     <field id="guideHours" type="integer" value="12" />
+    <!-- the guide's second pass: this many hours, fetched after the first is shown (24: more held the
+         listings of a big lineup several times over and ran a Roku low on memory) -->
+    <field id="guideMore" type="integer" value="24" />
     <!-- guide fallback input: [{ n, id, name, tvgName }] (lower-cased) -->
     <field id="chanKeys" type="array" />
     <field id="favNumber" type="string" />
@@ -30,6 +33,6 @@
     <field id="apiCtx" type="assocarray" />
     <field id="favOn" type="boolean" value="true" />
     <field id="status" type="string" />
-    <field id="result" type="assocarray" />
+    <field id="result" type="assocarray" alwaysNotify="true" />
   </interface>
 </component>

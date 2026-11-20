@@ -61,5 +61,7 @@
     <Timer id="previewTimer" duration="0.9" repeat="false" />
     <Timer id="clockTimer" duration="30" repeat="true" />
     <Timer id="jumpTimer" duration="1.6" repeat="false" />
+    <!-- Up/Down held: a pause, then a channel a step until it's let go -->
+    <Timer id="holdTimer" duration="0.4" repeat="true" />
   </children>
 </component>

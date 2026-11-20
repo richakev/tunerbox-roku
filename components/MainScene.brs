@@ -16,6 +16,10 @@ sub init()
     m.retryTimer = m.top.findNode("retryTimer")
     m.entryTimer = m.top.findNode("entryTimer")
     m.guideDelay = m.top.findNode("guideDelay")
+    m.savedGuideTimer = m.top.findNode("savedGuideTimer")
+    m.savedGuideTimer.observeField("fire", "startSavedGuide")
+    m.savedGuideWait = false
+    m.gstatus = m.top.findNode("gstatus")
     m.sports = m.top.findNode("sports")
     m.stats = m.top.findNode("stats")
     m.statsTasks = []
@@ -277,17 +281,13 @@ sub onTaskResult()
     end if
     m.quick = false
     rememberChannel(start_idx)
-    guideFresh = false
-    if r.guide <> invalid then
-        applyGuide(r.guide)
-        age = nowEpoch() - Int(Val(regRead("gTs", "0")))
-        guideFresh = (age >= 0 and age < 10800)
-    end if
     m.guide.favs = m.favs
     startFavsTask()
     fetchSettings()
-    ' the guide refresh is heavy: give the video a head start, and skip it if the cache is fresh
-    if not guideFresh then m.guideDelay.control = "start"
+    ' the saved guide is read once the video is playing (startSavedGuide), so it doesn't slow the stream down
+    m.savedGuideWait = true
+    m.savedGuideTimer.control = "start"
+    if m.video.state = "playing" then startSavedGuide()
     if m.homeAuto and m.homeOn and homeAtStart() then
         m.homeAuto = false
         openHome()
@@ -295,6 +295,44 @@ sub onTaskResult()
         showBanner()
     end if
     launchComplete()
+end sub
+
+' at launch, once the video is playing (or the timer gives up waiting): read the guide saved on this Roku
+sub startSavedGuide()
+    if not m.savedGuideWait then return
+    m.savedGuideWait = false
+    m.savedGuideTimer.control = "stop"
+    m.sgTask = CreateObject("roSGNode", "LoadTask")
+    m.sgTask.mode = "savedguide"
+    ' the saved files are named after the server
+    m.sgTask.baseUrl = m.base
+    m.sgTask.observeField("result", "onSavedGuide")
+    m.sgTask.control = "RUN"
+end sub
+
+sub onSavedGuide()
+    r = m.sgTask.result
+    if r = invalid then return
+    ' memory: the finished task would keep its copy of the guide in its result; let the task go
+    m.sgTask = invalid
+    bootGuide(r.guide)
+end sub
+
+' the saved guide, read after the channels and the video's start; then the guide refresh, unless it's fresh
+sub bootGuide(g as Dynamic)
+    guideFresh = false
+    if g <> invalid then
+        applyGuide(g)
+        ' fresh: the whole guide (both passes) fetched in the last 3 hours. "gFullTs" is only written once the
+        ' second pass is in, so a guide saved with just the first hours (or by an older version, which wrote
+        ' "gTs") is fetched again
+        age = nowEpoch() - Int(Val(regRead("gFullTs", "0")))
+        guideFresh = (age >= 0 and age < 10800)
+        ' the live banner showed "Guide loading..." until now
+        if m.mode = "live" then showBanner()
+    end if
+    ' the guide refresh is heavy: give the video a head start, and skip it if the cache is fresh
+    if not guideFresh then m.guideDelay.control = "start"
 end sub
 
 ' ------------------------------------------------------------ launch beacon / deep links
@@ -374,6 +412,8 @@ sub startGuideTask()
         keys.Push({ n: ch.numStr, id: LCase(ch.tvgId), name: LCase(ch.name), tvgName: LCase(ch.tvgName) })
     end for
     m.guideLoading = true
+    m.guidePass = 0
+    guideCard("loading", 0, 0)
     m.guideTask = CreateObject("roSGNode", "LoadTask")
     m.guideTask.mode = "guide"
     m.guideTask.baseUrl = m.base
@@ -382,6 +422,25 @@ sub startGuideTask()
     m.guideTask.observeField("result", "onGuideResult")
     m.guideTask.control = "RUN"
 end sub
+
+' the guide's progress card (top right). Not over game stats, which sits in the same corner.
+sub guideCard(kind as String, n as Integer, reach as Integer)
+    if kind <> "hide" and m.stats.visible then kind = "hide"
+    m.gstatus.show = { kind: kind, channels: n, through: reach }
+end sub
+
+' how far ahead a guide goes: the latest end time of any show in it
+function guideReach(guideByNum as Object) as Integer
+    reach = 0
+    for each num in guideByNum
+        progs = guideByNum[num]
+        if progs <> invalid and progs.Count() > 0 then
+            lastP = progs[progs.Count() - 1]
+            if lastP.stop > reach then reach = lastP.stop
+        end if
+    end for
+    return reach
+end function
 
 ' guideByNum = { "<channel number>": [programs] }  ->  channels + guide view
 function applyGuide(guideByNum as Object) as Integer
@@ -405,17 +464,26 @@ function applyGuide(guideByNum as Object) as Integer
     return n
 end function
 
-sub onGuideResult()
-    r = m.guideTask.result
+sub onGuideResult(event as Object)
+    ' this answer's own copy (the task's field may already hold the next one)
+    r = event.getData()
+    if r = invalid or r.ok = invalid then return      ' (the {} that clears it, below)
     m.guideLoading = false
-    if r = invalid then return
     if not r.ok or r.count = 0 then
+        guideCard("hide", 0, 0)
         if m.epgCount = 0 then showToast("No guide data available")
         return
     end if
+    ' this comes twice: the first hours (shown at once), then the rest of the guide (replaces it quietly)
+    m.guidePass = m.guidePass + 1
     n = applyGuide(r.guide)
-    regWrite("gTs", nowEpoch().ToStr())
-    showToast("Guide loaded (" + n.ToStr() + " channels)")
+    ' the cache only counts as fresh once it has the whole guide; until then the next launch fetches again
+    if r.full = true then
+        regWrite("gFullTs", nowEpoch().ToStr())
+        ' memory: the task's result would keep a copy of the whole guide for as long as the task is around
+        m.guideTask.result = {}
+    end if
+    if m.guidePass = 1 then guideCard("ready", n, guideReach(r.guide)) else guideCard("extended", n, guideReach(r.guide))
 end sub
 
 ' ============================================================ favorites
@@ -759,6 +827,7 @@ sub onVideoState()
     end if
     if st = "playing" then
         m.retries = 0
+        if m.savedGuideWait then startSavedGuide()
     else if st = "error" or st = "finished" then
         ' a live channel with backups: one more try on this feed, then the next feed in Setup's order
         if m.extern = invalid and m.playIdx >= 0 and m.retries >= 1 and m.alt < chAlts(m.playIdx) then
@@ -1264,6 +1333,7 @@ sub openStats()
     end if
     m.hud.callFunc("hideAll")
     m.mode = "stats"
+    guideCard("hide", 0, 0)
     m.stats.callFunc("openStats")
     m.stats.message = "Loading..."
     setStatsPreview()
@@ -2152,6 +2222,7 @@ sub applyScreenFit()
     end for
     ' the guide re-flows into the safe area at full size instead of being shrunk
     m.guide.safe = [m.fitOff[0], m.fitOff[1], m.fitOff[0], m.fitOff[1]]
+    m.gstatus.safe = ins
     if m.mode = "guide" or (m.mode = "fitcal" and m.calPrev = "guide") then setPreviewSize(true)
     if m.mode = "ondemand" then setOdPreview()
     if m.mode = "stats" then setStatsPreview()
