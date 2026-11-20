@@ -41,9 +41,6 @@
       <Label id="toastLbl" color="0xFFFFFFFF" font="font:MediumBoldSystemFont" />
     </Group>
 
-    <!-- the guide's progress: a card in the top right corner while it loads, then what it got -->
-    <GuideStatus id="gstatus" />
-
     <!-- screen-fit calibration overlay: NOT scaled, drawn in raw screen pixels -->
     <Group id="fitCal" visible="false">
       <Rectangle id="calTop" color="0xFFC845FF" />
@@ -60,6 +57,8 @@
     <Timer id="retryTimer" duration="2" repeat="false" />
     <Timer id="entryTimer" duration="1.8" repeat="false" />
     <Timer id="guideDelay" duration="8" repeat="false" />
+    <!-- while the app is open: is the guide due a refresh? (MainScene.brs onGuideRefresh) -->
+    <Timer id="guideRefresh" duration="1800" repeat="true" />
     <!-- at launch: read the saved guide once the video plays, or after this long if it doesn't -->
     <Timer id="savedGuideTimer" duration="6" repeat="false" />
     <Timer id="checkTimer" duration="1.5" repeat="true" />

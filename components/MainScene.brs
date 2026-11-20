@@ -16,10 +16,11 @@ sub init()
     m.retryTimer = m.top.findNode("retryTimer")
     m.entryTimer = m.top.findNode("entryTimer")
     m.guideDelay = m.top.findNode("guideDelay")
+    m.guideRefresh = m.top.findNode("guideRefresh")
+    m.guideRefresh.observeField("fire", "onGuideRefresh")
     m.savedGuideTimer = m.top.findNode("savedGuideTimer")
     m.savedGuideTimer.observeField("fire", "startSavedGuide")
     m.savedGuideWait = false
-    m.gstatus = m.top.findNode("gstatus")
     m.sports = m.top.findNode("sports")
     m.stats = m.top.findNode("stats")
     m.statsTasks = []
@@ -236,6 +237,18 @@ sub onGuideDelay()
     startGuideTask()
 end sub
 
+' every 30 min while the app is open: the guide again once the last full fetch is 3 hours old, so an app left
+' on for a day doesn't run out of listings.
+sub onGuideRefresh()
+    if m.channels.Count() = 0 or m.base = "" then return
+    if m.mode = "boot" or m.mode = "needhost" or m.mode = "error" then return
+    if m.guideTask <> invalid and m.guideTask.state = "run" then return
+    age = nowEpoch() - Int(Val(regRead("gFullTs", "0")))
+    if age >= 0 and age < 10800 then return
+    print "[TunerBox] guide is " + Int(age / 60).ToStr() + " min old: refreshing in the background"
+    startGuideTask()
+end sub
+
 sub onTaskResult()
     r = m.task.result
     if r = invalid then return
@@ -333,6 +346,8 @@ sub bootGuide(g as Dynamic)
     end if
     ' the guide refresh is heavy: give the video a head start, and skip it if the cache is fresh
     if not guideFresh then m.guideDelay.control = "start"
+    ' and from now on, a check every 30 min (onGuideRefresh)
+    m.guideRefresh.control = "start"
 end sub
 
 ' ------------------------------------------------------------ launch beacon / deep links
@@ -413,7 +428,6 @@ sub startGuideTask()
     end for
     m.guideLoading = true
     m.guidePass = 0
-    guideCard("loading", 0, 0)
     m.guideTask = CreateObject("roSGNode", "LoadTask")
     m.guideTask.mode = "guide"
     m.guideTask.baseUrl = m.base
@@ -423,11 +437,6 @@ sub startGuideTask()
     m.guideTask.control = "RUN"
 end sub
 
-' the guide's progress card (top right). Not over game stats, which sits in the same corner.
-sub guideCard(kind as String, n as Integer, reach as Integer)
-    if kind <> "hide" and m.stats.visible then kind = "hide"
-    m.gstatus.show = { kind: kind, channels: n, through: reach }
-end sub
 
 ' how far ahead a guide goes: the latest end time of any show in it
 function guideReach(guideByNum as Object) as Integer
@@ -470,7 +479,6 @@ sub onGuideResult(event as Object)
     if r = invalid or r.ok = invalid then return      ' (the {} that clears it, below)
     m.guideLoading = false
     if not r.ok or r.count = 0 then
-        guideCard("hide", 0, 0)
         if m.epgCount = 0 then showToast("No guide data available")
         return
     end if
@@ -483,7 +491,8 @@ sub onGuideResult(event as Object)
         ' memory: the task's result would keep a copy of the whole guide for as long as the task is around
         m.guideTask.result = {}
     end if
-    if m.guidePass = 1 then guideCard("ready", n, guideReach(r.guide)) else guideCard("extended", n, guideReach(r.guide))
+    if m.guidePass = 1 then print "[TunerBox] guide applied: " + n.ToStr() + " channels, through " + fmtClock(guideReach(r.guide))
+    if r.full = true then print "[TunerBox] guide complete: " + n.ToStr() + " channels, through " + fmtDay(guideReach(r.guide)) + " " + fmtClock(guideReach(r.guide))
 end sub
 
 ' ============================================================ favorites
@@ -1333,7 +1342,6 @@ sub openStats()
     end if
     m.hud.callFunc("hideAll")
     m.mode = "stats"
-    guideCard("hide", 0, 0)
     m.stats.callFunc("openStats")
     m.stats.message = "Loading..."
     setStatsPreview()
@@ -2222,7 +2230,6 @@ sub applyScreenFit()
     end for
     ' the guide re-flows into the safe area at full size instead of being shrunk
     m.guide.safe = [m.fitOff[0], m.fitOff[1], m.fitOff[0], m.fitOff[1]]
-    m.gstatus.safe = ins
     if m.mode = "guide" or (m.mode = "fitcal" and m.calPrev = "guide") then setPreviewSize(true)
     if m.mode = "ondemand" then setOdPreview()
     if m.mode = "stats" then setStatsPreview()

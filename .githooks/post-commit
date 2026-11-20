@@ -1,5 +1,6 @@
 #!/bin/sh
-# Rebuild tunerbox-tv.zip (and bump minor_version) if the app changed since the last build.
+# Rebuild tunerbox-tv.zip if the app changed since the last build, keeping the committed version (the
+# next build after this commit bumps minor_version).
 set -eu
 root=$(git rev-parse --show-toplevel)
-"$root/.githooks/build-zip.sh"
+NO_BUMP=1 "$root/.githooks/build-zip.sh"

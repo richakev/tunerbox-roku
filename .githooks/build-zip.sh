@@ -1,6 +1,8 @@
 #!/bin/sh
-# Bumps minor_version in manifest and rebuilds tunerbox-tv.zip, but only when the app's files
-# (components, images, source, or the manifest apart from minor_version) changed since the last build.
+# Rebuilds tunerbox-tv.zip when the app's files (components, images, source, or the manifest apart from
+# minor_version) changed since the last build. minor_version goes up once per commit: on the first build
+# after a commit (while the manifest still has the committed number), not on every build. NO_BUMP=1
+# rebuilds without bumping (the post-commit hook, so a commit doesn't leave the manifest changed).
 # Run by the Claude Code Stop hook and by the post-commit hook; safe to run by hand.
 set -eu
 
@@ -29,7 +31,14 @@ fi
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 
-awk -F= '
+current=$(grep '^minor_version=' manifest | cut -d= -f2)
+committed=$(git show HEAD:manifest 2>/dev/null | grep '^minor_version=' | cut -d= -f2 || true)
+bump=1
+[ "${NO_BUMP:-}" = "1" ] && bump=0
+# already bumped since the last commit: keep the number
+[ -n "$committed" ] && [ "$current" != "$committed" ] && bump=0
+
+[ "$bump" = "1" ] && awk -F= '
     BEGIN { OFS = "="; found = 0 }
     $1 == "minor_version" {
         if (found || $2 !~ /^[0-9]+$/) exit 1
@@ -38,8 +47,7 @@ awk -F= '
     }
     { print }
     END { if (!found) exit 1 }
-' manifest > "$tmp/manifest"
-cp "$tmp/manifest" manifest
+' manifest > "$tmp/manifest" && cp "$tmp/manifest" manifest
 
 rm -f tunerbox-tv.zip
 zip -qr tunerbox-tv.zip manifest components images source -x '*.DS_Store'
