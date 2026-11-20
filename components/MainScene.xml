@@ -23,8 +23,9 @@
     <SportsView id="sports" visible="false" />
     <StatsView id="stats" visible="false" />
     <SearchView id="search" visible="false" />
-    <OnDemandView id="od" visible="false" />
     <HomeView id="home" visible="false" />
+    <!-- after Home: its movie panel can open over Home (Continue Watching) as well as over Search -->
+    <OnDemandView id="od" visible="false" />
     <MenuView id="menu" visible="false" />
     <JumpPad id="jump" visible="false" />
 

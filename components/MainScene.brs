@@ -52,7 +52,6 @@ sub init()
     m.subsLbl.font.size = 44
     m.searchFrom = ""
     m.svod = invalid        ' the On Demand title whose play menu is open over Search or Home
-    m.svodSeq = 0
     m.menu = m.top.findNode("menu")
     m.jump = m.top.findNode("jump")
     m.jump.observeField("result", "onJumpResult")
@@ -2696,7 +2695,7 @@ sub closeOnDemand()
     m.top.setFocus(true)
 end sub
 
-' a movie found by Search: On Demand's movie panel (and Pick a version) over the Search screen
+' a movie picked in Search or on Home: On Demand's movie panel (and Pick a version) over the Search screen
 sub openOdOverlay(id as String)
     m.odOverlay = true
     m.od.baseUrl = m.base
@@ -2708,13 +2707,18 @@ sub endOdOverlay()
     m.odOverlay = false
     m.od.callFunc("closeOD")
     pvResume()          ' live TV paused for Pick a version: back on
-    if m.mode = "search" then m.search.setFocus(true)
+    restoreFocus()      ' Search or Home, where it was opened
 end sub
 
 sub onOdRequest()
     req = m.od.request
     if req = invalid then return
     ty = req.type
+    if ty = "changed" then
+        ' My List / watched / Continue Watching changed from the panel over Home: its rows again
+        if m.mode = "home" then m.home.callFunc("reload")
+        return
+    end if
     if truthy(m.odOverlay) then
         if ty = "overlayDone" then
             endOdOverlay()
@@ -3638,73 +3642,10 @@ sub onHomeApi(event as Object)
         end if
     else if r.tag = "cuguide" then
         gotPastGuide(r)
-    else if r.tag = "svod" then
-        if r.ctx.seq <> m.svodSeq or m.mode <> r.ctx.mode then return
-        if not r.ok or Type(r.data) <> "roAssociativeArray" or anyStr(r.data.id) = "" then
-            showToast("That title is no longer in the playlist")
-        else
-            searchMovieDialog(r.data)
-        end if
     end if
 end sub
 
-' ============================================================ On Demand movies picked in Search or Home
-' a movie's play menu over the screen it was picked on, as On Demand's: resume or play, My List, watched
-sub vodTitleMenu(id as String)
-    m.svodSeq = m.svodSeq + 1
-    homeApi("svod", "/api/vod/title/" + urlEncode(id), "", invalid, { seq: m.svodSeq, mode: m.mode })
-end sub
-
-' (title details from GET /api/vod/title)
-sub searchMovieDialog(d as Object)
-    at = numv(d.position)
-    resume = (not truthy(d.watched) and at > 30)
-    buttons = []
-    actions = []
-    if resume then
-        buttons.Push("Resume from " + fmtDur(at))
-        actions.Push("resume")
-        buttons.Push("Play from the beginning")
-    else
-        buttons.Push("Play")
-    end if
-    actions.Push("play")
-    if truthy(d.in_list) then buttons.Push("Remove from My List") else buttons.Push("Add to My List")
-    actions.Push("list")
-    if truthy(d.watched) then buttons.Push("Mark as not watched") else buttons.Push("Mark as watched")
-    actions.Push("watched")
-    if resume then
-        buttons.Push("Remove from Continue Watching")
-        actions.Push("forget")
-    end if
-    buttons.Push("Close")
-    actions.Push("close")
-    genre = anyStr(d.genre)
-    if genre = "" then genre = anyStr(d.category)
-    parts = []
-    ' its picture, sound and bitrate as far as they're known (not read yet: what its label says)
-    av = d.av
-    if Type(av) <> "roAssociativeArray" then av = d.hint
-    for each s in ["Movie", anyStr(d.year), fmtLen(numv(d.duration)), fmtAv(av), fmtRate(numv(d.bitrate)), genre]
-        if s <> "" then parts.Push(s)
-    end for
-    msg = [parts.Join(dotSep())]
-    note = ""
-    if anyStr(d.source_name) <> "" then note = "From " + anyStr(d.source_name)
-    st = ""
-    if resume then
-        st = "You stopped at " + fmtDur(at)
-    else if truthy(d.watched) then
-        st = "Watched"
-    end if
-    if note <> "" and st <> "" then note = note + dotSep()
-    note = note + st
-    if note <> "" then msg.Push(note)
-    if anyStr(d.plot) <> "" then msg.Push(plainText(anyStr(d.plot)))
-    m.svod = d
-    showDialog("svod", anyStr(d.name), msg, buttons, actions)
-end sub
-
+' ============================================================ On Demand episodes picked in Search
 sub searchVodAction(kind as String, action as String, d as Object)
     id = anyStr(d.id)
     if kind = "svodep" then
@@ -3905,7 +3846,7 @@ sub homePick(it as Object)
     else if t = "vod" then
         id = anyStr(it.id)
         if anyStr(it.kind) <> "series" then
-            vodTitleMenu(id)       ' its play menu over Home, not the On Demand screen
+            openOdOverlay(id)      ' On Demand's movie panel over Home, not the On Demand screen
         else if anyStr(it.resume) = "" then
             openOnDemand({ showId: id })
         else

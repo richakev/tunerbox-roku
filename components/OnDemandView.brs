@@ -281,7 +281,12 @@ sub onApi(event as Object)
             return
         end if
         toast(ctx.msg)
-        if m.top.visible and not isTrue(m.overlay) then refresh()
+        if m.top.visible and not isTrue(m.overlay) then
+            refresh()
+        else
+            ' the panel was over another screen (Home's Continue Watching): it shows the change itself
+            m.top.request = { type: "changed" }
+        end if
         return
     end if
     if not m.top.visible then return
@@ -1237,6 +1242,10 @@ sub movieDialog(d as Object)
     actions.Push("list")
     if isTrue(d.watched) then buttons.Push("Mark as not watched") else buttons.Push("Mark as watched")
     actions.Push("watched")
+    if resume then
+        buttons.Push("Remove from Continue Watching")
+        actions.Push("forget")
+    end if
     ' the same film under the playlist's other labels (languages, 4K...)
     others = []
     for each v in arr(d.versions)
@@ -1562,6 +1571,8 @@ sub dialogDo(a as String)
             goCategory(anyStr(d.category))
         else if a = "versions" then
             openVersions(d)
+        else if a = "forget" then
+            api("watched", "/api/vod/forget", { id: anyStr(d.id) }, { msg: "Removed from Continue Watching" })
         end if
     else if p.kind = "episode" then
         e = p.e
