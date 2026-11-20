@@ -11,14 +11,17 @@
     <field id="failed" type="boolean" alwaysNotify="true" onChange="onFailed" />
     <!-- outputs to the scene: { type: "close" | "refresh" | "watch", o } -->
     <field id="request" type="assocarray" alwaysNotify="true" />
+    <!-- set by the scene: its screen-fit scale. The scene moves this view into the safe area but doesn't
+         scale it; the view draws at the final size itself, so its text stays sharp -->
+    <field id="fit" type="float" value="1.0" onChange="onFit" />
     <function name="openStats" />
     <function name="closeStats" />
   </interface>
   <children>
     <!-- over the full-size picture: a see-through card in the top right corner, as tall as what's in it;
          on the Live scores tab a slim panel down the right. The box is drawn in StatsView.brs (layoutFrame). -->
-    <!-- everything drawn is inside "sizer", shrunk to StatsView.brs m.SIZE from the box's top-right corner (the
-         scene scales the whole view separately, for the screen's safe area) -->
+    <!-- nothing here is scaled: StatsView.brs places and sizes everything at the size it shows at (m.SIZE of
+         the full-size layout, from the box's top-right corner, times the scene's fit) -->
     <Group id="sizer">
     <Group id="frameGroup" />
     <Label id="leagueLbl" width="300" height="36" vertAlign="center" color="0x2ED47AFF" />
@@ -27,8 +30,7 @@
     <Group id="tabsGroup" />
     <Group id="bodyGroup" />
     <Label id="msgLbl" height="150" horizAlign="center" vertAlign="center" wrap="true" color="0xC5D3EFFF" />
-    <Group id="hintsGroup" />
-    <Label id="updLbl" width="190" height="36" horizAlign="right" vertAlign="center" color="0x8FA3C8FF" />
+    <Label id="updLbl" width="190" height="36" horizAlign="right" vertAlign="center" color="0xB4C3E2FF" />
     </Group>
     <Timer id="refreshTimer" duration="20" repeat="true" />
   </children>

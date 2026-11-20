@@ -2134,10 +2134,14 @@ sub applyScreenFit()
     pct = Val(regRead("fit", "2.5")) / 100.0
     m.fitScale = 1.0 - 2.0 * pct
     m.fitOff = [Int(1920 * pct + 0.5), Int(1080 * pct + 0.5)]
-    for each n in [m.sports, m.stats, m.search, m.od, m.menu, m.statusGroup, m.toast]
+    for each n in [m.sports, m.search, m.od, m.menu, m.statusGroup, m.toast]
         n.scale = [m.fitScale, m.fitScale]
         n.translation = m.fitOff
     end for
+    ' game stats draws itself at the fitted size (a scaled box over the game blurred its small text)
+    m.stats.scale = [1.0, 1.0]
+    m.stats.translation = m.fitOff
+    m.stats.fit = m.fitScale
     ' Home and the live-TV bar / banner move into the safe area at full size and lay out inside it, so their
     ' text and pictures stay sharp (shrinking them blurs both)
     ins = [m.fitOff[0], m.fitOff[1], m.fitOff[0], m.fitOff[1]]

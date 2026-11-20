@@ -56,6 +56,7 @@ sub init()
     m.holdTimer = m.top.findNode("holdTimer")
     m.holdTimer.observeField("fire", "onHoldTimer")
     m.holdKey = ""
+    m.holdZone = ""
     m.holdSteps = 0
     m.clockTimer.observeField("fire", "drawClock")
     m.pvTimer = m.top.findNode("pvTimer")
@@ -2830,9 +2831,10 @@ sub onCatTimer()
     loadItems(false, false)
 end sub
 
-' ============================================================ Up/Down held on the category column
+'' ============================================================ Up/Down held (category column, titles grid)
 sub holdStart(key as String)
     m.holdKey = key
+    m.holdZone = m.zone
     m.holdSteps = 0
     m.holdTimer.control = "stop"
     m.holdTimer.duration = 0.4
@@ -2853,20 +2855,41 @@ sub holdStop(load as Boolean)
 end sub
 
 sub onHoldTimer()
-    if m.holdKey = "" or m.zone <> "cats" or m.show <> invalid or not m.top.visible then
+    if m.holdKey = "" or m.zone <> m.holdZone or m.show <> invalid or not m.top.visible then
         holdStop(false)
         return
     end if
     if m.holdSteps = 0 then
         m.holdTimer.control = "stop"
-        m.holdTimer.duration = 0.09
+        ' a row of posters a step: a little slower than the category names
+        if m.zone = "grid" then m.holdTimer.duration = 0.15 else m.holdTimer.duration = 0.09
         m.holdTimer.control = "start"
     end if
     m.holdSteps = m.holdSteps + 1
+    if m.zone = "grid" then
+        holdGridStep()
+        return
+    end if
     before = m.cat
     if m.holdKey = "up" then setCat(m.cat - 1) else setCat(m.cat + 1)
     ' at either end of the column: stop there (held Up doesn't carry on into the tabs)
     if m.cat = before then m.holdTimer.control = "stop"
+end sub
+
+' one row up or down the titles grid while Up/Down is held
+sub holdGridStep()
+    before = m.sel
+    if m.holdKey = "up" then
+        ' stops on the first row (held Up doesn't carry on into the tabs)
+        if m.sel >= m.COLS then moveSel(0 - m.COLS)
+    else
+        gridKey("down")
+    end if
+    if m.sel = before then
+        ' at the end of what's loaded while the next page is on its way: keep going once it's in
+        if m.holdKey = "down" and m.loading and m.items.Count() < m.total then return
+        m.holdTimer.control = "stop"
+    end if
 end sub
 
 sub moveSel(delta as Integer)
@@ -3075,6 +3098,9 @@ function onKeyEvent(key as String, press as Boolean) as Boolean
         return true
     end if
 
-    if gridKey(key) then return true
+    if gridKey(key) then
+        if (key = "up" or key = "down") and m.zone = "grid" then holdStart(key)
+        return true
+    end if
     return true
 end function
