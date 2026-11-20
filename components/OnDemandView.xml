@@ -58,6 +58,8 @@
     <Timer id="infoTimer" duration="0.4" repeat="false" />
     <Timer id="tabTimer" duration="0.45" repeat="false" />
     <Timer id="catTimer" duration="0.35" repeat="false" />
+    <!-- Up/Down held in the category column: steps on its own (first after a pause, then quickly) -->
+    <Timer id="holdTimer" duration="0.4" repeat="true" />
     <Timer id="clockTimer" duration="20" repeat="true" />
     <!-- Pick a version: after letting go of live TV, before reading (providers take a moment to see it closed) -->
     <Timer id="pvTimer" duration="1.5" repeat="false" />

@@ -6,7 +6,8 @@
 
 sub init()
     themeInit()
-    m.PV = [40, 30, 560, 315]
+    ' where the live-TV preview sits (not m.PV: names ignore case, so that's m.pv, Pick a version's state)
+    m.PREVIEW_RECT = [40, 30, 560, 315]
     m.CAT_X = 40
     m.CAT_Y = 440
     m.CAT_W = 400
@@ -21,10 +22,17 @@ sub init()
     m.GAP = 16
     m.EP_H = 58
     m.NEPS = 10
-    m.PAGE = 140
+    ' first page of a list: 3 screens of tiles (small = quick to parse and hand over); later pages are bigger
+    m.PAGE = 42
+    m.MORE = 84
+    ' lists already seen (first page only), so switching back to a category shows at once
+    m.CACHE_MAX = 12
+    m.CACHE_FRESH = 120
+    m.uptime = CreateObject("roTimespan")
+    m.cacheGen = 0
     m.RESUME_MIN = 30
 
-    m.top.previewRect = m.PV
+    m.top.previewRect = m.PREVIEW_RECT
     m.titleLbl = m.top.findNode("titleLbl")
     m.metaLbl = m.top.findNode("metaLbl")
     m.srcLbl = m.top.findNode("srcLbl")
@@ -45,6 +53,10 @@ sub init()
     m.infoTimer.observeField("fire", "onInfoTimer")
     m.tabTimer.observeField("fire", "onTabTimer")
     m.catTimer.observeField("fire", "onCatTimer")
+    m.holdTimer = m.top.findNode("holdTimer")
+    m.holdTimer.observeField("fire", "onHoldTimer")
+    m.holdKey = ""
+    m.holdSteps = 0
     m.clockTimer.observeField("fire", "drawClock")
     m.pvTimer = m.top.findNode("pvTimer")
     m.pvTimer.observeField("fire", "onPvTimer")
@@ -95,6 +107,7 @@ sub init()
     m.pending = invalid
     m.tasks = []
     m.message = ""
+    cacheClear()
     buildNodes()
 end sub
 
@@ -146,6 +159,8 @@ sub buildNodes()
             n.poster.loadWidth = m.TW
             n.poster.loadHeight = m.TH
             n.poster.loadDisplayMode = "scaleToFill"
+            ' the rows below start loading only once the ones on screen are in (see prefetchWhenReady)
+            n.poster.observeField("loadStatus", "onTileLoad")
             n.tagBg = mkRect(x, y, 70, 30, thm("0xE0243CFF"))
             n.tag = mkLabel(x, y, 70, 30, "", 19, true, thm("0xFFFFFFFF"))
             n.tag.horizAlign = "center"
@@ -258,6 +273,10 @@ sub onApi(event as Object)
         if r.ok then gotDetail(r.data)
         return
     end if
+    if tag = "pre" then
+        gotPre(r, ctx)
+        return
+    end if
     if tag = "settings" then
         ' Setup > Settings: read each version's details for Pick a version (auto | ask | off)
         if r.ok and Type(r.data) = "roAssociativeArray" and anyStr(r.data.vod_details) <> "" then m.vodDetails = anyStr(r.data.vod_details)
@@ -350,6 +369,7 @@ sub openOD(args as Object)
     m.args = args
     m.message = "Loading On Demand..."
     m.seq = m.seq + 1
+    cacheClear()
     api("counts", "/api/vod", invalid, {})
     api("settings", "/api/settings", invalid, {})
     render()
@@ -373,6 +393,7 @@ sub closeOD()
     m.infoTimer.control = "stop"
     m.tabTimer.control = "stop"
     m.catTimer.control = "stop"
+    holdStop(false)
     m.clockTimer.control = "stop"
     m.top.visible = false
     m.top.setFocus(false)
@@ -425,6 +446,8 @@ end sub
 sub refresh()
     m.details = {}
     m.nDetails = 0
+    ' progress / watched / My List marks may have changed: cached lists are out of date
+    cacheClear()
     if m.show <> invalid then
         api("show", "/api/vod/title/" + urlEncode(m.show.id), invalid, { keep: true })
     else if m.tab = 4 then
@@ -576,23 +599,128 @@ sub gotCats(r as Object)
     loadItems(false, false)
 end sub
 
+' ============================================================ list cache (per tab / category)
+' key of the list for category ci of this tab ("" when there is none)
+function itemsKey(ci as Integer) as String
+    if not hasCats() then return "tab|" + tabKind()
+    if ci < 0 or ci >= m.cats.Count() or m.cats[ci].all then return tabKind() + "|*all"
+    return tabKind() + "|=" + m.cats[ci].key
+end function
+
+function itemsPath(ci as Integer) as String
+    if not hasCats() then return "/api/vod/titles?tab=" + tabKind()
+    path = "/api/vod/titles?kind=" + tabKind()
+    if ci >= 0 and ci < m.cats.Count() and not m.cats[ci].all then path = path + "&cat=" + urlEncode(m.cats[ci].key)
+    return path
+end function
+
+sub cacheClear()
+    m.cache = {}
+    m.cache.SetModeCaseSensitive()
+    m.cacheKeys = []
+    m.preInFlight = {}
+    m.preInFlight.SetModeCaseSensitive()
+    m.waitPre = ""
+    m.cacheGen = m.cacheGen + 1
+end sub
+
+' keeps (a copy of) the first page only: the shown list grows as you scroll and must not grow the cache
+sub cacheSet(key as String, items as Object, total as Integer)
+    if key = "" then return
+    n = items.Count()
+    if n > m.PAGE then n = m.PAGE
+    copy = []
+    for i = 0 to n - 1
+        copy.Push(items[i])
+    end for
+    m.cache[key] = { items: copy, total: total, at: m.uptime.TotalSeconds() }
+    for i = 0 to m.cacheKeys.Count() - 1
+        if m.cacheKeys[i] = key then
+            m.cacheKeys.Delete(i)
+            exit for
+        end if
+    end for
+    m.cacheKeys.Push(key)
+    while m.cacheKeys.Count() > m.CACHE_MAX
+        m.cache.Delete(m.cacheKeys.Shift())
+    end while
+end sub
+
+function cacheFresh(c as Dynamic) as Boolean
+    return c <> invalid and m.uptime.TotalSeconds() - c.at < m.CACHE_FRESH
+end function
+
+sub useCached(c as Object)
+    items = []
+    items.Append(c.items)
+    m.items = items
+    m.total = c.total
+    m.message = ""
+end sub
+
+' first page of the categories above and below, so moving up / down the column usually finds it ready
+sub prefetchCats()
+    if not hasCats() or m.cats.Count() = 0 then return
+    for each ci in [m.cat + 1, m.cat - 1]
+        if ci >= 0 and ci < m.cats.Count() then
+            key = itemsKey(ci)
+            if not cacheFresh(m.cache[key]) and not m.preInFlight.DoesExist(key) then
+                m.preInFlight[key] = true
+                api("pre", itemsPath(ci) + "&offset=0&limit=" + m.PAGE.ToStr(), invalid, { key: key, gen: m.cacheGen })
+            end if
+        end if
+    end for
+end sub
+
+sub gotPre(r as Object, ctx as Object)
+    if numv(ctx.gen) <> m.cacheGen then return
+    key = anyStr(ctx.key)
+    m.preInFlight.Delete(key)
+    if r.ok and Type(r.data) = "roAssociativeArray" then cacheSet(key, arr(r.data.items), Int(numv(r.data.total)))
+    ' the category was picked while its prefetch was on the way: this is its list
+    if m.top.visible and m.waitPre <> "" and m.waitPre = key and key = itemsKey(m.cat) and m.tab <> 4 then
+        m.waitPre = ""
+        gotItems(r, { key: key })
+    end if
+end sub
+
 sub loadItems(keep as Boolean, append as Boolean)
     if m.tab = 4 then return
     if not append then m.seq = m.seq + 1
-    if hasCats() then
-        path = "/api/vod/titles?kind=" + tabKind()
-        if m.cats.Count() > 0 and m.cat < m.cats.Count() and not m.cats[m.cat].all then path = path + "&cat=" + urlEncode(m.cats[m.cat].key)
-    else
-        path = "/api/vod/titles?tab=" + tabKind()
+    m.waitPre = ""
+    key = itemsKey(m.cat)
+    if not keep and not append then
+        c = m.cache[key]
+        if c <> invalid then
+            useCached(c)
+            if cacheFresh(c) then
+                m.loading = false
+                render()
+                prefetchCats()
+                return
+            end if
+            ' seen a while ago: shown as it was, and read again in the background
+            keep = true
+        else if m.preInFlight.DoesExist(key) then
+            m.items = []
+            m.total = 0
+            m.message = ""
+            m.loading = true
+            m.waitPre = key
+            render()
+            return
+        end if
     end if
+    path = itemsPath(m.cat)
     off = 0
     if append then off = m.items.Count()
     limit = m.PAGE
+    if append then limit = m.MORE
     if keep and m.items.Count() > limit then limit = m.items.Count()
     if limit > 500 then limit = 500
     path = path + "&offset=" + off.ToStr() + "&limit=" + limit.ToStr()
     m.loading = true
-    api("items", path, invalid, { seq: m.seq, append: append, keep: keep })
+    api("items", path, invalid, { seq: m.seq, append: append, keep: keep, key: key })
     if not append then render()
 end sub
 
@@ -615,6 +743,10 @@ sub gotItems(r as Object, ctx as Object)
         m.items = arr(d.items)
     end if
     m.total = Int(numv(d.total))
+    if not isTrue(ctx.append) then
+        cacheSet(anyStr(ctx.key), m.items, m.total)
+        prefetchCats()
+    end if
     if isTrue(ctx.keep) or isTrue(ctx.append) then
         if m.sel > m.items.Count() - 1 then m.sel = m.items.Count() - 1
         if m.sel < 0 then m.sel = 0
@@ -630,7 +762,7 @@ end sub
 
 sub maybeMore()
     if m.tab = 4 or m.loading then return
-    if m.items.Count() < m.total and m.sel >= m.items.Count() - m.COLS * 2 then loadItems(false, true)
+    if m.items.Count() < m.total and m.sel >= m.items.Count() - m.COLS * 4 then loadItems(false, true)
 end sub
 
 ' ============================================================ details (plot, cast, length)
@@ -918,7 +1050,7 @@ sub drawMain()
             drawTile(tile, m.items[i], i)
         end if
     end for
-    prefetch()
+    prefetchWhenReady()
 end sub
 
 '' small poster made by TunerBox (GET /api/vod/poster/<id>), not the provider's full-size image
@@ -935,6 +1067,23 @@ function posterUri(t as Object) as String
     if id = "" then return ""
     return m.top.baseUrl + "/api/vod/poster/" + urlEncode(id)
 end function
+
+' The posters on screen first: the hidden ones for the rows below would otherwise be asked for at the same
+' moment and race them (the end of the list could fill in before its start). So they wait until every shown
+' tile's poster has loaded (or failed); a tile with no poster, or one hidden, doesn't hold them up.
+sub prefetchWhenReady()
+    for each tile in m.tiles
+        if tile.poster.visible and tile.poster.uri <> "" then
+            st = tile.poster.loadStatus
+            if st <> "ready" and st <> "failed" then return
+        end if
+    end for
+    prefetch()
+end sub
+
+sub onTileLoad()
+    if m.top.visible then prefetchWhenReady()
+end sub
 
 ' start loading the next rows' posters (off screen) so they're ready when you scroll down
 sub prefetch()
@@ -1272,6 +1421,15 @@ sub movieDialog(d as Object)
         note = note + " " + Chr(183) + " You stopped at " + fmtDur(playPos)
     else if isTrue(d.watched) then
         note = note + " " + Chr(183) + " Watched"
+    else
+        ' not started in this copy, but in another one: say which, most recent first
+        best = invalid
+        for each v in arr(d.versions)
+            if not isTrue(v.current) and not isTrue(v.watched) and numv(v.position) > m.RESUME_MIN then
+                if best = invalid or numv(v.stopped) > numv(best.stopped) then best = v
+            end if
+        end for
+        if best <> invalid then note = note + " " + Chr(183) + " You stopped " + pvName(best, "another version") + " at " + fmtDur(numv(best.position))
     end if
     m.md = { d: d, title: anyStr(d.name), meta: meta, note: note, plot: anyStr(d.plot), cast: anyStr(d.actors),
              poster: posterUri(d), buttons: buttons, actions: actions, sel: 0, ctx: { kind: "movie", d: d } }
@@ -1624,6 +1782,19 @@ function pvName(v as Object, none as String) as String
     return n
 end function
 
+' a version's own progress (TunerBox sends it per version): { text, pct, watched }, or invalid when it has none
+function pvProgress(v as Object) as Dynamic
+    if isTrue(v.watched) then return { text: "WATCHED", pct: 0, watched: true }
+    secs = numv(v.position)
+    if secs <= m.RESUME_MIN then return invalid
+    dur = numv(v.duration)
+    if dur <= 0 then dur = numv(v.pdur)
+    pct = 0
+    if dur > 0 then pct = secs / dur
+    if pct > 1 then pct = 1
+    return { text: "STOPPED AT " + fmtDur(secs), pct: pct, watched: false }
+end function
+
 function pvClient() as String
     if m.pvClient = invalid then m.pvClient = "roku-" + CreateObject("roDeviceInfo").GetChannelClientId()
     return m.pvClient
@@ -1671,7 +1842,7 @@ sub openVersions(d as Object)
     note = "Pick a version"
     if anyStr(d.kind) <> "series" and pvMode() = "auto" and pvUnread(vs) then note = note + " " + Chr(183) + " checking each one..."
     m.pv = { d: d, vs: vs, tag: "pv" + Int(m.pvSeq).ToStr(), open: true, reading: true, held: false,
-             at: at, queue: [], force: false, note: note, sel: 0, waitId: "" }
+             at: at, queue: [], force: false, note: note, sel: 0, waitId: "", ask: invalid }
     ' start on the version playing / picked last
     for i = 0 to vs.Count() - 1
         if isTrue(vs[i].current) then m.pv.sel = i
@@ -1683,6 +1854,7 @@ end sub
 ' the rows: { kind: "v", v, label } per version, then Read details (again) and Close
 function pvRows() as Object
     pv = m.pv
+    if pv.ask <> invalid then return pvAskRows()
     vs = pv.vs
     rows = []
     ' index loops, not "for each": a "for each" over vs inside another over vs shares the array's one
@@ -1732,6 +1904,84 @@ function pvRows() as Object
     rows.Push({ kind: "close", label: "Close" })
     return rows
 end function
+
+' A version picked that was started (here, or in the one you were watching) or watched: where it starts.
+' Its row stays on top (not selectable), the choices under it as buttons.
+function pvAskRows() as Object
+    pv = m.pv
+    v = pv.ask.v
+    rows = [{ kind: "v", v: v, label: pv.ask.label, fixed: true }]
+    own = pvProgress(v)
+    ownAt = -1
+    if own <> invalid and not own.watched then
+        ownAt = numv(v.position)
+        rows.Push({ kind: "act", act: "play", at: ownAt, label: "Resume from " + fmtDur(ownAt) })
+    end if
+    carry = pvCarry(v)
+    if carry >= 0 and (ownAt < 0 or Abs(carry - ownAt) > 60) then
+        rows.Push({ kind: "act", act: "play", at: carry, label: "Continue from " + fmtDur(carry) + " (where " + pvName(pvHere(), "this version") + " stopped)" })
+    end if
+    rows.Push({ kind: "act", act: "play", at: 0, label: "Play from the beginning" })
+    if own <> invalid then rows.Push({ kind: "act", act: "unwatch", label: "Mark this copy as not watched" })
+    rows.Push({ kind: "act", act: "back", label: "Back" })
+    return rows
+end function
+
+' the version you were watching (CURRENT), or invalid
+function pvHere() as Dynamic
+    for each x in m.pv.vs
+        if isTrue(x.current) then return x
+    end for
+    return invalid
+end function
+
+' where the version you were watching stopped, as the same point in v (-1: none, or v is that version)
+function pvCarry(v as Object) as Float
+    pv = m.pv
+    if isTrue(v.current) or pv.at < 0 then return -1
+    here = pvHere()
+    lenHere = numv(pv.d.duration)
+    if here <> invalid and numv(here.duration) > 0 then lenHere = numv(here.duration)
+    return pvSamePoint(pv.at, lenHere, numv(v.duration))
+end function
+
+' play v from `at` seconds (0: the beginning)
+sub pvPlay(v as Object, at as Float)
+    mdClose()               ' the movie panel under it: done
+    m.pv.open = false
+    m.pv.ask = invalid
+    m.pv.held = false       ' what plays next is this version: live TV doesn't come back first (playVod forgets it)
+    pvDraw()
+    play(anyStr(v.id), at)
+end sub
+
+' "Mark this copy as not watched": its progress gone (TunerBox: only this version's), back to the list
+sub pvUnwatch(v as Object)
+    pv = m.pv
+    api("watched", "/api/vod/watched", { id: anyStr(v.id), watched: false }, { msg: pvName(v, "This copy") + " marked as not watched" })
+    v.position = 0
+    v.watched = false
+    v.stopped = 0
+    if isTrue(v.current) then
+        pv.at = -1
+        pv.d.position = 0
+        pv.d.watched = false
+        if mdIsOpen() then movieDialog(pv.d)
+    end if
+    pvAskEnd()
+end sub
+
+' back from "where to start" to the versions, on the one that was picked
+sub pvAskEnd()
+    pv = m.pv
+    v = pv.ask.v
+    pv.ask = invalid
+    pv.sel = 0
+    for i = 0 to pv.vs.Count() - 1
+        if anyStr(pv.vs[i].id) = anyStr(v.id) then pv.sel = i
+    end for
+    pvDraw()
+end sub
 
 ' a version's details line: codec, sound, bitrate, length (only when the versions' lengths differ), file
 function pvMeta(v as Object, lenDiffers as Boolean) as String
@@ -1857,7 +2107,9 @@ sub pvDraw()
     title = anyStr(d.name)
     if anyStr(d.year) <> "" then title = title + " (" + anyStr(d.year) + ")"
     g.appendChild(mkLabel(PX + 40, PY + 26, PW - 80, 60, title, 44, true, white))
-    g.appendChild(mkLabel(PX + 40, PY + 90, PW - 80, 36, pv.note, 26, false, dimC))
+    noteText = pv.note
+    if pv.ask <> invalid then noteText = "Where do you want to start?"
+    g.appendChild(mkLabel(PX + 40, PY + 90, PW - 80, 36, noteText, 26, false, dimC))
     if first > 0 then g.appendChild(mkLabel(PX + PW - 140, PY + 90, 100, 36, "more up", 22, false, dimC))
 
     y = PY + 140
@@ -1923,10 +2175,12 @@ sub pvDraw()
                 pvChip(g, bx, y + (VH - 40) \ 2, 40, b.t, 22, fill, ln, col)
                 bx = bx - 10
             end for
-            ' the name, then its tags
+            ' the name, then its tags (room kept for them: the name is cut short first)
+            prog = pvProgress(v)
             nameLbl = mkLabel(RX + 24, y + 14, 0, 50, r.label, 34, true, fg)
             nw = Int(nameLbl.boundingRect().width)
             maxName = bx - (RX + 24) - 330
+            if prog <> invalid then maxName = maxName - 250
             if nw > maxName then
                 nameLbl.width = maxName
                 nw = maxName
@@ -1948,7 +2202,29 @@ sub pvDraw()
                     tl = hlText
                     tc = hlText
                 end if
-                pvChip(g, tx, y + 23, 32, "CURRENT", 18, tf, tl, tc)
+                tx = tx + pvChip(g, tx, y + 23, 32, "CURRENT", 18, tf, tl, tc) + 10
+            end if
+            ' where this version was stopped (or that it was watched), and a bar along the row's foot
+            if prog <> invalid then
+                pf = thm("0xE0243CFF")
+                if prog.watched then pf = thm("0x1B6B2FFF")
+                pvChip(g, tx, y + 23, 32, prog.text, 18, pf, "", "0xFFFFFFFF")
+                if prog.pct > 0 then
+                    BW = RW - 48
+                    track = CreateObject("roSGNode", "Rectangle")
+                    track.translation = [RX + 24, y + VH - 10]
+                    track.width = BW
+                    track.height = 5
+                    track.color = "0xFFFFFF33"
+                    if sel then track.color = "0x00000033"
+                    g.appendChild(track)
+                    fillBar = CreateObject("roSGNode", "Rectangle")
+                    fillBar.translation = [RX + 24, y + VH - 10]
+                    fillBar.width = Int(BW * prog.pct)
+                    fillBar.height = 5
+                    fillBar.color = pf
+                    g.appendChild(fillBar)
+                end if
             end if
             ' what's known of it underneath
             meta = mkLabel(RX + 24, y + 66, bx - (RX + 24) - 10, 36, pvMeta(v, lenDiffers), 24, false, sub2)
@@ -1976,10 +2252,12 @@ end sub
 function pvKey(key as String) as Boolean
     pv = m.pv
     rows = pvRows()
+    top = 0
+    if pv.ask <> invalid then top = 1
     if key = "back" then
-        pvClose()
+        if pv.ask <> invalid then pvAskEnd() else pvClose()
     else if key = "up" then
-        if pv.sel > 0 then
+        if pv.sel > top then
             pv.sel = pv.sel - 1
             pvDraw()
         end if
@@ -2004,22 +2282,26 @@ sub pvPick(r as Object)
         pvRead(true, isTrue(r.again))
         return
     end if
-    v = r.v
-    mdClose()               ' the movie panel under it: done
-    pv.open = false
-    pv.held = false         ' what plays next is this version: live TV doesn't come back first (playVod forgets it)
-    pvDraw()
-    if isTrue(v.current) or pv.at < 0 then
-        play(anyStr(v.id), -1)
+    if r.kind = "act" then
+        if r.act = "play" then
+            pvPlay(pv.ask.v, r.at)
+        else if r.act = "unwatch" then
+            pvUnwatch(pv.ask.v)
+        else
+            pvAskEnd()
+        end if
         return
     end if
-    here = invalid
-    for each x in pv.vs
-        if isTrue(x.current) then here = x
-    end for
-    lenHere = numv(pv.d.duration)
-    if here <> invalid and numv(here.duration) > 0 then lenHere = numv(here.duration)
-    play(anyStr(v.id), pvSamePoint(pv.at, lenHere, numv(v.duration)))
+    if isTrue(r.fixed) then return
+    v = r.v
+    ' started or watched (this copy, or the one you were watching): ask where to start; else just play
+    if pvProgress(v) <> invalid or pvCarry(v) >= 0 then
+        pv.ask = { v: v, label: r.label }
+        pv.sel = 1
+        pvDraw()
+        return
+    end if
+    pvPlay(v, 0)
 end sub
 
 ' where `at` seconds into a copy `lenFrom` long falls in a copy `lenTo` long. Only a 24 fps film against a 25 fps
@@ -2033,8 +2315,8 @@ function pvSamePoint(at as Float, lenFrom as Float, lenTo as Float) as Float
 end function
 
 sub pvClose()
+    if Type(m.pv) <> "roAssociativeArray" then return
     pv = m.pv
-    if pv = invalid then return
     pv.open = false
     pvDraw()
     pvRelease()
@@ -2056,11 +2338,18 @@ sub gotPvList(r as Object, ctx as Object)
     if r.ok and Type(r.data) = "roArray" and r.data.Count() > 0 then
         ' the highlight stays on the same version when the list comes back in another order
         selId = ""
-        if pv.sel < pv.vs.Count() then selId = anyStr(pv.vs[pv.sel].id)
+        if pv.ask <> invalid then
+            selId = anyStr(pv.ask.v.id)
+        else if pv.sel < pv.vs.Count() then
+            selId = anyStr(pv.vs[pv.sel].id)
+        end if
         pv.vs = r.data
         pvKnown(pv.vs)
         for i = 0 to pv.vs.Count() - 1
-            if anyStr(pv.vs[i].id) = selId then pv.sel = i
+            if anyStr(pv.vs[i].id) = selId then
+                ' asking where to start: the highlight stays on its choice, the version gets the new details
+                if pv.ask <> invalid then pv.ask.v = pv.vs[i] else pv.sel = i
+            end if
         end for
     end if
     if anyStr(pv.d.kind) <> "series" and pvMode() = "auto" then
@@ -2521,13 +2810,63 @@ sub setCat(i as Integer)
     m.cat = i
     m.sel = 0
     m.topRow = 0
-    drawSide()
+    c = invalid
+    if m.holdSteps = 0 then c = m.cache[itemsKey(i)]
+    if c <> invalid then
+        ' seen before: shown at once (the timer still reads it again if it's old, and fetches the neighbours)
+        m.seq = m.seq + 1
+        m.waitPre = ""
+        useCached(c)
+        m.loading = false
+        render()
+    else
+        drawSide()
+    end if
     m.catTimer.control = "stop"
     m.catTimer.control = "start"
 end sub
 
 sub onCatTimer()
     loadItems(false, false)
+end sub
+
+' ============================================================ Up/Down held on the category column
+sub holdStart(key as String)
+    m.holdKey = key
+    m.holdSteps = 0
+    m.holdTimer.control = "stop"
+    m.holdTimer.duration = 0.4
+    m.holdTimer.control = "start"
+end sub
+
+' let go (or something else happened): when it scrolled, the list it stopped on loads now, not after the pause
+sub holdStop(load as Boolean)
+    if m.holdKey = "" then return
+    m.holdTimer.control = "stop"
+    stepped = m.holdSteps > 0
+    m.holdKey = ""
+    m.holdSteps = 0
+    if load and stepped and m.zone = "cats" and m.show = invalid then
+        m.catTimer.control = "stop"
+        loadItems(false, false)
+    end if
+end sub
+
+sub onHoldTimer()
+    if m.holdKey = "" or m.zone <> "cats" or m.show <> invalid or not m.top.visible then
+        holdStop(false)
+        return
+    end if
+    if m.holdSteps = 0 then
+        m.holdTimer.control = "stop"
+        m.holdTimer.duration = 0.09
+        m.holdTimer.control = "start"
+    end if
+    m.holdSteps = m.holdSteps + 1
+    before = m.cat
+    if m.holdKey = "up" then setCat(m.cat - 1) else setCat(m.cat + 1)
+    ' at either end of the column: stop there (held Up doesn't carry on into the tabs)
+    if m.cat = before then m.holdTimer.control = "stop"
 end sub
 
 sub moveSel(delta as Integer)
@@ -2641,7 +2980,14 @@ function showKey(key as String) as Boolean
 end function
 
 function onKeyEvent(key as String, press as Boolean) as Boolean
-    if not press then return false
+    if not press then
+        if m.holdKey <> "" and key = m.holdKey then
+            holdStop(true)
+            return true
+        end if
+        return false
+    end if
+    holdStop(false)
     if not m.top.visible then return false
     if isTrue(m.overlay) then
         if pvIsOpen() then
@@ -2711,9 +3057,11 @@ function onKeyEvent(key as String, press as Boolean) as Boolean
                 render()
             else
                 setCat(m.cat - 1)
+                holdStart("up")
             end if
         else if key = "down" then
             setCat(m.cat + 1)
+            holdStart("down")
         else if key = "rewind" then
             setCat(m.cat - m.NCATS)
         else if key = "fastforward" then

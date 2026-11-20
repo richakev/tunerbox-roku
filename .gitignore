@@ -1,3 +1,7 @@
 *.zip
 .build-stamp
 .roku.env
+
+# personal Claude Code notes (loaded by Claude Code, never committed)
+CLAUDE.local.md
+CLAUDE.md

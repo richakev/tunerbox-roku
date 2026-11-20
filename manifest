@@ -1,6 +1,6 @@
 title=TunerBox TV
 major_version=3
-minor_version=55
+minor_version=62
 build_version=3
 mm_icon_focus_hd=pkg:/images/icon_focus_hd.png
 mm_icon_focus_sd=pkg:/images/icon_focus_sd.png

@@ -18,6 +18,9 @@ fingerprint() {
     } | shasum | cut -d' ' -f1
 }
 
+# a BrightScript reserved word used as a name only fails on the Roku itself: stop here instead
+python3 "$root/.githooks/check-reserved.py"
+
 now=$(fingerprint)
 if [ -f "$stamp" ] && [ -f tunerbox-tv.zip ] && [ "$(cat "$stamp")" = "$now" ]; then
     exit 0
