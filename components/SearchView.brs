@@ -1,5 +1,6 @@
-' Search panel (mirrors the TunerBox web search): on-screen keyboard on the left,
-' live results (matching channels, then matching upcoming programs) on the right.
+' Search panel (mirrors the TunerBox web search): on-screen keyboard on the left (the same keys and look as
+' Search On Demand), live results (matching channels, then matching upcoming programs) on the right. While
+' nothing is typed, the right side lists the last 5 searches: one press runs it again.
 ' The scene does the matching (it owns the channel list) and handles watch / record.
 
 sub init()
@@ -30,17 +31,23 @@ sub init()
     m.msgLbl.font.size = 32
     m.footLbl.font.size = 27
 
-    ' keyboard: { t: text shown, v: value, row, col, span }
+    ' keyboard: { t: text shown, v: value, row, col, span }: the letters as Search On Demand's (kbRows), then
+    ' Space / Delete / Clear
     m.keys = []
-    chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ123456789"
-    for i = 0 to Len(chars) - 1
-        c = Mid(chars, i + 1, 1)
-        m.keys.Push({ t: c, v: LCase(c), row: i \ 7, col: i mod 7, span: 1 })
+    rows = kbRows()
+    for r = 0 to rows.Count() - 1
+        for c = 0 to 6
+            ch = Mid(rows[r], c + 1, 1)
+            m.keys.Push({ t: ch, v: ch, row: r, col: c, span: 1 })
+        end for
     end for
-    m.keys.Push({ t: "0", v: "0", row: 5, col: 0, span: 1 })
-    m.keys.Push({ t: "Space", v: "space", row: 5, col: 1, span: 2 })
-    m.keys.Push({ t: "Del", v: "del", row: 5, col: 3, span: 1 })
-    m.keys.Push({ t: "Clear", v: "clear", row: 5, col: 4, span: 2 })
+    m.LASTROW = rows.Count()
+    m.keys.Push({ t: "Space", v: "space", row: m.LASTROW, col: 0, span: 3 })
+    m.keys.Push({ t: "Delete", v: "del", row: m.LASTROW, col: 3, span: 2 })
+    m.keys.Push({ t: "Clear", v: "clear", row: m.LASTROW, col: 5, span: 2 })
+    m.recent = []
+    m.rsel = 0
+    m.wantResults = false
 
     m.q = ""
     m.items = []
@@ -55,6 +62,9 @@ end sub
 sub openSearch()
     m.q = ""
     m.items = []
+    m.recent = recentSearches("searchRecent")
+    m.rsel = 0
+    m.wantResults = false
     m.focus = "keys"
     m.krow = 0
     m.kcol = 0
@@ -79,6 +89,9 @@ sub onResults()
     m.items = r.items
     m.sel = 0
     m.top0 = 0
+    ' a recent search picked: straight into its results
+    if m.wantResults and m.items.Count() > 0 then m.focus = "results"
+    m.wantResults = false
     if m.items.Count() = 0 and m.focus = "results" then m.focus = "keys"
     render()
 end sub
@@ -134,9 +147,13 @@ sub keyMove(dr as Integer, dc as Integer)
     if dc > 0 then
         nc = k.col + k.span
         if keyAt(m.krow, nc) = ki or nc > 6 then
-            ' off the right edge: into the results
+            ' off the right edge: into the results (nothing typed: the recent searches)
             if m.items.Count() > 0 then
                 m.focus = "results"
+                rememberQuery()
+                render()
+            else if m.q.Trim() = "" and m.recent.Count() > 0 then
+                m.focus = "recent"
                 render()
             end if
             return
@@ -147,7 +164,7 @@ sub keyMove(dr as Integer, dc as Integer)
         m.kcol = m.keys[keyAt(m.krow, k.col - 1)].col
     else
         nr = m.krow + dr
-        if nr < 0 or nr > 5 then return
+        if nr < 0 or nr > m.LASTROW then return
         m.krow = nr
         m.kcol = m.keys[keyAt(nr, m.kcol)].col
     end if
@@ -166,18 +183,28 @@ end sub
 
 ' ------------------------------------------------------------ drawing
 sub render()
-    m.queryLbl.text = m.q + "_"
-    if m.focus = "keys" then
-        m.boxBorder.color = thm("0xFFC845FF")
+    if m.q = "" then
+        m.queryLbl.text = "A channel, show, movie or team"
+        m.queryLbl.color = thm("0xA9BEE8FF")
     else
-        m.boxBorder.color = thm("0x4F86E8FF")
+        m.queryLbl.text = m.q + "_"
+        m.queryLbl.color = thm("0xFFFFFFFF")
+    end if
+    if m.focus = "keys" then
+        m.boxBorder.blendColor = thm("0xFFC845FF")
+    else
+        m.boxBorder.blendColor = thm("0x4F86E8FF")
     end if
     drawKeys()
     drawRows()
     if m.focus = "results" then
-        m.footLbl.text = "OK  Watch / Record / Open      Left  Keyboard      Back  Close"
+        m.footLbl.text = "OK  Watch / Record / Open      Left  Keyboard      Rew/FF  Page      Back  Keyboard"
+    else if m.focus = "recent" then
+        m.footLbl.text = "OK  Search again      Up/Down  Recent searches      Left  Keyboard      Back  Keyboard"
+    else if m.q.Trim() = "" and m.recent.Count() > 0 then
+        m.footLbl.text = "OK  Type      Right  Recent searches      Replay  Delete      Back  Close"
     else
-        m.footLbl.text = "OK  Type      Right  Results      Replay  Delete      Back  Close"
+        m.footLbl.text = "OK  Type      Right  Results      Replay  Delete      Play  Results      Back  Close"
     end if
 end sub
 
@@ -189,15 +216,18 @@ sub drawKeys()
         x = m.KX + k.col * (m.KW + m.KGAP)
         y = m.KY + k.row * (m.KH + m.KGAP)
         w = k.span * m.KW + (k.span - 1) * m.KGAP
-        if i = cur and m.focus = "keys" then
+        sel = (i = cur and m.focus = "keys")
+        if sel then
             bg = thm("0xFFC845FF")
-            tc = thm("0x10244AFF")
+            tc = thm("0x111111FF")
         else
-            bg = thm("0x2052B8FF")
+            bg = thm("0x16306AFF")
             tc = thm("0xFFFFFFFF")
         end if
-        m.keysGroup.appendChild(mkRect(x, y, w, m.KH, bg))
-        l = mkLabel(x, y, w, m.KH, k.t, 30, true, tc)
+        pvBox(m.keysGroup, x, y, w, m.KH, bg, "")
+        size = 32
+        if k.span > 1 then size = 28
+        l = mkLabel(x, y, w, m.KH, k.t, size, sel, tc)
         l.horizAlign = "center"
         m.keysGroup.appendChild(l)
     end for
@@ -214,7 +244,12 @@ sub drawRows()
     n = m.items.Count()
     if m.q.Trim() = "" then
         m.countLbl.text = ""
-        m.msgLbl.text = "Type a channel name, show title or movie"
+        if m.recent.Count() = 0 then
+            m.msgLbl.text = "Type a channel name, show title or movie"
+        else
+            m.msgLbl.text = ""
+            drawRecent()
+        end if
         return
     end if
     if n = 0 then
@@ -245,6 +280,25 @@ sub drawRows()
     end for
 end sub
 
+' nothing typed yet: the last searches, as Search On Demand lists them
+sub drawRecent()
+    g = m.rowsGroup
+    g.appendChild(mkLabel(m.ROW_X, m.ROW_Y, m.ROW_W, 40, "RECENT SEARCHES", 22, true, thm("0xA9BEE8FF")))
+    y = m.ROW_Y + 54
+    for i = 0 to m.recent.Count() - 1
+        sel = (m.focus = "recent" and m.rsel = i)
+        c = thm("0xFFFFFFFF")
+        if sel then
+            pvBox(g, m.ROW_X, y, m.ROW_W, 66, thm("0xFFC845FF"), "")
+            c = thm("0x111111FF")
+        else
+            pvBox(g, m.ROW_X, y, m.ROW_W, 66, thm("0x16306AFF"), "")
+        end if
+        g.appendChild(mkLabel(m.ROW_X + 24, y, m.ROW_W - 48, 66, anyStr(m.recent[i]), 30, sel, c))
+        y = y + 66 + 10
+    end for
+end sub
+
 function sv(v as Dynamic) as String
     if v = invalid then return ""
     t = Type(v)
@@ -266,7 +320,7 @@ sub drawRow(it as Object, r as Integer, selected as Boolean)
     h = m.ROW_H - 6
     x0 = m.ROW_X
     if selected then
-        m.rowsGroup.appendChild(mkRect(x0, y, m.ROW_W, h, thm("0xFFC845FF")))
+        pvBox(m.rowsGroup, x0, y, m.ROW_W, h, thm("0xFFC845FF"), "")
         tc = thm("0x111111FF")
         nc = thm("0x111111FF")
         rc = thm("0x222222FF")
@@ -306,7 +360,7 @@ sub drawRow(it as Object, r as Integer, selected as Boolean)
     end if
     bw = Len(badge) * 13 + 28
     if bw < 60 then bw = 60
-    m.rowsGroup.appendChild(mkRect(tx, y + 16, bw, h - 32, bg))
+    pvBox(m.rowsGroup, tx, y + 14, bw, h - 28, bg, "")
     bl = mkLabel(tx, y + 16, bw, h - 32, badge, 22, false, thm("0xFFFFFFFF"))
     bl.horizAlign = "center"
     m.rowsGroup.appendChild(bl)
@@ -342,10 +396,19 @@ sub drawRow(it as Object, r as Integer, selected as Boolean)
     end if
 end sub
 
+' what's typed is remembered for next time once it found something you looked at: going into its results,
+' opening one, or closing Search with results showing (not every half-typed word)
+sub rememberQuery()
+    if m.q.Trim() = "" or m.items.Count() = 0 then return
+    addRecentSearch(m.q, "searchRecent")
+    m.recent = recentSearches("searchRecent")
+end sub
+
 ' ------------------------------------------------------------ keys
 sub activate()
     if m.sel < 0 or m.sel >= m.items.Count() then return
     it = m.items[m.sel]
+    rememberQuery()
     if it.k = "ch" then
         m.top.request = { type: "channel", num: it.num, name: sv(it.name) }
     else if it.k = "feed" then
@@ -372,10 +435,11 @@ function onKeyEvent(key as String, press as Boolean) as Boolean
     end if
 
     if key = "back" then
-        if m.focus = "results" then
+        if m.focus = "results" or m.focus = "recent" then
             m.focus = "keys"
             render()
         else
+            rememberQuery()
             m.top.request = { type: "close" }
         end if
     else if key = "backspace" or key = "replay" then
@@ -396,10 +460,27 @@ function onKeyEvent(key as String, press as Boolean) as Boolean
         else if key = "play" then
             if m.items.Count() > 0 then
                 m.focus = "results"
+                rememberQuery()
                 render()
             end if
         else
             return false
+        end if
+    else if m.focus = "recent" then
+        if key = "left" then
+            m.focus = "keys"
+            render()
+        else if key = "up" and m.rsel > 0 then
+            m.rsel = m.rsel - 1
+            render()
+        else if key = "down" and m.rsel < m.recent.Count() - 1 then
+            m.rsel = m.rsel + 1
+            render()
+        else if key = "OK" or key = "play" then
+            ' run it again: its results come in like typing it, and the highlight goes to them
+            m.wantResults = true
+            m.focus = "keys"
+            setQuery(anyStr(m.recent[m.rsel]))
         end if
     else
         if key = "left" then

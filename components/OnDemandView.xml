@@ -9,13 +9,17 @@
     <field id="dialogAction" type="string" alwaysNotify="true" onChange="onDialogAction" />
     <!-- text typed in the search keyboard -->
     <field id="searchText" type="string" alwaysNotify="true" onChange="onSearchText" />
-    <!-- outputs to the scene: { type: "close" | "dialog" | "keyboard" | "play" | "toast", ... } -->
+    <!-- outputs to the scene: { type: "close" | "dialog" | "keyboard" | "play" | "toast" | "pvhold" | "pvresume", ... } -->
     <field id="request" type="assocarray" alwaysNotify="true" />
+    <!-- the scene's answer to a "pvhold" request: true when it paused live TV for Pick a version's reads -->
+    <field id="pvHeld" type="boolean" alwaysNotify="true" onChange="onPvHeld" />
     <!-- where the live-TV preview sits, in this view's own coordinates [x, y, w, h] -->
     <field id="previewRect" type="array" />
     <function name="openOD" />
     <function name="reopenOD" />
     <function name="closeOD" />
+    <!-- a movie's panel (and Pick a version) over another screen: { id } -->
+    <function name="openMovie" />
   </interface>
   <children>
     <!-- background with a hole for the live-TV preview (top left); oversized so it still reaches the screen
@@ -44,10 +48,18 @@
     <Group id="mainGroup" />
     <Label id="msgLbl" translation="[480,560]" width="1380" height="160" horizAlign="center" vertAlign="center" wrap="true" color="0xDCE8FFFF" font="font:MediumSystemFont" />
     <Label id="footLbl" translation="[40,1030]" width="1840" height="40" vertAlign="center" color="0xC5D3EFFF" font="font:SmallSystemFont" />
+    <!-- a movie's details and buttons: poster, text and buttons side by side (drawn by OnDemandView.brs) -->
+    <Group id="mdGroup" visible="false" />
+    <!-- Search On Demand: recent searches beside the keyboard (drawn by OnDemandView.brs) -->
+    <Group id="kbGroup" visible="false" />
+    <!-- Pick a version, over everything (drawn by OnDemandView.brs) -->
+    <Group id="pvGroup" visible="false" />
 
     <Timer id="infoTimer" duration="0.4" repeat="false" />
     <Timer id="tabTimer" duration="0.45" repeat="false" />
     <Timer id="catTimer" duration="0.35" repeat="false" />
     <Timer id="clockTimer" duration="20" repeat="true" />
+    <!-- Pick a version: after letting go of live TV, before reading (providers take a moment to see it closed) -->
+    <Timer id="pvTimer" duration="1.5" repeat="false" />
   </children>
 </component>

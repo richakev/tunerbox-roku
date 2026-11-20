@@ -77,6 +77,7 @@ sub init()
     m.curIdx = -1
     m.lastIdx = -1
     m.playIdx = -1
+    m.pvHeldIdx = -1        ' live channel paused for On Demand's Pick a version reads
     m.alt = 0           ' which of the playing channel's feeds: 0 the main one, 1.. its backups (Setup's order)
     m.altNum = ""       ' the channel number m.alt is for (a reload can put another channel at the same index)
     m.feedTask = invalid
@@ -1773,7 +1774,7 @@ sub onSearchRequest()
             m.svod = v
             showDialog("svodep", anyStr(v.name), [anyStr(v["sub"])], ["Play", "All episodes", "Close"], ["play", "all", "close"])
         else
-            vodTitleMenu(anyStr(v.id))
+            openOdOverlay(anyStr(v.id))
         end if
     else if ty = "feed" then
         f = req.f
@@ -2658,6 +2659,7 @@ sub openOnDemand(args as Object)
     if m.mode = "search" then closeSearch()
     if m.mode = "vod" then vodStop(false)
     m.hud.callFunc("hideAll")
+    m.odOverlay = false
     m.mode = "ondemand"
     m.od.baseUrl = m.base
     m.od.callFunc("openOD", args)
@@ -2688,15 +2690,47 @@ end sub
 
 sub closeOnDemand()
     m.od.callFunc("closeOD")
+    pvResume()          ' live TV paused for Pick a version: back on
     setPreviewSize(false)
     m.mode = "live"
     m.top.setFocus(true)
 end sub
 
+' a movie found by Search: On Demand's movie panel (and Pick a version) over the Search screen
+sub openOdOverlay(id as String)
+    m.odOverlay = true
+    m.od.baseUrl = m.base
+    m.od.callFunc("openMovie", { id: id })
+end sub
+
+sub endOdOverlay()
+    if not truthy(m.odOverlay) then return
+    m.odOverlay = false
+    m.od.callFunc("closeOD")
+    pvResume()          ' live TV paused for Pick a version: back on
+    if m.mode = "search" then m.search.setFocus(true)
+end sub
+
 sub onOdRequest()
     req = m.od.request
-    if req = invalid or m.mode <> "ondemand" then return
+    if req = invalid then return
     ty = req.type
+    if truthy(m.odOverlay) then
+        if ty = "overlayDone" then
+            endOdOverlay()
+        else if ty = "toast" then
+            showToast(req.text)
+        else if ty = "pvhold" then
+            m.od.pvHeld = pvHold()
+        else if ty = "pvresume" then
+            pvResume()
+        else if ty = "play" then
+            endOdOverlay()
+            playVod(req.id, req.start, false)
+        end if
+        return
+    end if
+    if m.mode <> "ondemand" then return
     if ty = "close" then
         closeOnDemand()
         if not backToHome() then showBanner()
@@ -2704,11 +2738,40 @@ sub onOdRequest()
         showToast(req.text)
     else if ty = "dialog" then
         showDialog("vod", req.title, req.message, req.buttons, req.actions)
+    else if ty = "pvhold" then
+        m.od.pvHeld = pvHold()
+    else if ty = "pvresume" then
+        pvResume()
     else if ty = "keyboard" then
         showKeyboard("vodsearch", "Search On Demand", ["A title, a year or an actor"], req.text)
     else if ty = "play" then
         playVod(req.id, req.start, true)
     end if
+end sub
+
+' Pick a version needs the playlist's connection that the live-TV preview holds: stop the preview for the
+' reads (On Demand tells TunerBox it's let go). -> true when there was a live channel to stop. An event
+' feed has no channel to go back to: left playing.
+function pvHold() as Boolean
+    if m.vod <> invalid or m.rec <> invalid or m.extern <> invalid or m.playIdx < 0 then return false
+    st = m.video.state
+    if st <> "playing" and st <> "buffering" and st <> "paused" then return false
+    m.retryTimer.control = "stop"
+    m.video.control = "stop"
+    m.pvHeldIdx = m.playIdx
+    showToast("Live TV paused while the versions are read")
+    return true
+end function
+
+' the reads are done (or the dialog was closed): the channel comes back on, unless something else started
+sub pvResume()
+    idx = m.pvHeldIdx
+    m.pvHeldIdx = -1
+    if idx = invalid or idx < 0 then return
+    if m.vod <> invalid or m.rec <> invalid or m.extern <> invalid or m.playIdx <> idx then return
+    st = m.video.state
+    if st = "playing" or st = "buffering" then return
+    playChannel(idx)
 end sub
 
 ' small GET / POST to TunerBox for playback (results come back in onVodApi)
@@ -3163,6 +3226,7 @@ end function
 ' start < 0 = resume where you stopped
 sub playVod(id as String, start as Float, back as Boolean)
     m.vodSeq = m.vodSeq + 1
+    m.pvHeldIdx = -1        ' live TV paused for Pick a version stays off: this plays instead
     showToast("Loading...")
     vodApi("vodplay", "/api/vod/play/" + urlEncode(id), invalid, { seq: m.vodSeq, start: start, back: back })
 end sub
@@ -3618,7 +3682,10 @@ sub searchMovieDialog(d as Object)
     genre = anyStr(d.genre)
     if genre = "" then genre = anyStr(d.category)
     parts = []
-    for each s in ["Movie", anyStr(d.year), fmtLen(numv(d.duration)), genre]
+    ' its picture, sound and bitrate as far as they're known (not read yet: what its label says)
+    av = d.av
+    if Type(av) <> "roAssociativeArray" then av = d.hint
+    for each s in ["Movie", anyStr(d.year), fmtLen(numv(d.duration)), fmtAv(av), fmtRate(numv(d.bitrate)), genre]
         if s <> "" then parts.Push(s)
     end for
     msg = [parts.Join(dotSep())]

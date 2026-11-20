@@ -46,6 +46,11 @@ sub init()
     m.tabTimer.observeField("fire", "onTabTimer")
     m.catTimer.observeField("fire", "onCatTimer")
     m.clockTimer.observeField("fire", "drawClock")
+    m.pvTimer = m.top.findNode("pvTimer")
+    m.pvTimer.observeField("fire", "onPvTimer")
+    m.pvGroup = m.top.findNode("pvGroup")
+    m.mdGroup = m.top.findNode("mdGroup")
+    m.kbGroup = m.top.findNode("kbGroup")
 
     m.titleLbl.font.size = 46
     m.metaLbl.font.size = 29
@@ -253,6 +258,32 @@ sub onApi(event as Object)
         if r.ok then gotDetail(r.data)
         return
     end if
+    if tag = "settings" then
+        ' Setup > Settings: read each version's details for Pick a version (auto | ask | off)
+        if r.ok and Type(r.data) = "roAssociativeArray" and anyStr(r.data.vod_details) <> "" then m.vodDetails = anyStr(r.data.vod_details)
+        return
+    end if
+    ' Pick a version: also after On Demand closed (lets go of paused live TV)
+    if tag = "pvlist" then
+        gotPvList(r, ctx)
+        return
+    else if tag = "pvpeek" then
+        gotPvPeek(r, ctx)
+        return
+    else if tag = "pvstop" then
+        gotPvStop(ctx)
+        return
+    end if
+    ' My List / watched: said even when the panel over Search has closed meanwhile
+    if tag = "list" or tag = "watched" then
+        if not r.ok then
+            toast("Could not reach TunerBox")
+            return
+        end if
+        toast(ctx.msg)
+        if m.top.visible and not isTrue(m.overlay) then refresh()
+        return
+    end if
     if not m.top.visible then return
     if tag = "counts" then
         gotCounts(r)
@@ -275,8 +306,10 @@ sub onApi(event as Object)
             render()
         end if
     else if tag = "pick" then
+        m.overlayLoading = false
         if not r.ok then
             toast("That title is no longer in the playlist")
+            overlayEnd()
             return
         end if
         gotDetail(r.data)
@@ -293,13 +326,6 @@ sub onApi(event as Object)
         end if
         gotDetail(r.data)
         openShow(r.data, isTrue(ctx.keep))
-    else if tag = "list" or tag = "watched" then
-        if not r.ok then
-            toast("Could not reach TunerBox")
-            return
-        end if
-        toast(ctx.msg)
-        refresh()
     end if
 end sub
 
@@ -311,6 +337,7 @@ end sub
 ' args: {} = where you left it, { kind: "movie" | "series" }, { showId }, { movieId }, { episode: { id, name, sub, title_id } }
 sub openOD(args as Object)
     if args = invalid then args = {}
+    overlayRestore()
     m.top.visible = true
     m.top.setFocus(true)
     m.clockTimer.control = "start"
@@ -319,6 +346,7 @@ sub openOD(args as Object)
     m.message = "Loading On Demand..."
     m.seq = m.seq + 1
     api("counts", "/api/vod", invalid, {})
+    api("settings", "/api/settings", invalid, {})
     render()
 end sub
 
@@ -333,12 +361,60 @@ end sub
 
 sub closeOD()
     m.seq = m.seq + 1
+    pvClose()
+    mdClose()
+    kbClose()
+    overlayRestore()
     m.infoTimer.control = "stop"
     m.tabTimer.control = "stop"
     m.catTimer.control = "stop"
     m.clockTimer.control = "stop"
     m.top.visible = false
     m.top.setFocus(false)
+end sub
+
+' ============================================================ over another screen (Search)
+' A movie found by Search: only its panel (and Pick a version) over the Search screen, the rest of On Demand
+' hidden. Closing them hands back to the scene (request "overlayDone"); playing goes through it as usual.
+sub openMovie(args as Object)
+    overlayRestore()
+    m.overlay = true
+    m.overlayLoading = true
+    m.overlayHidden = []
+    for i = 0 to m.top.getChildCount() - 1
+        ch = m.top.getChild(i)
+        ' Timers have no "visible": skipped (it reads as invalid, which can't go in an "and")
+        keep = (not ch.hasField("visible")) or ch.isSameNode(m.mdGroup) or ch.isSameNode(m.pvGroup)
+        if not keep then
+            if ch.visible = true then
+                ch.visible = false
+                m.overlayHidden.Push(ch)
+            end if
+        end if
+    end for
+    m.show = invalid
+    mdClose()
+    m.top.visible = true
+    m.top.setFocus(true)
+    api("settings", "/api/settings", invalid, {})
+    api("pick", "/api/vod/title/" + urlEncode(anyStr(args.id)), invalid, {})
+end sub
+
+' the rest of On Demand shown again (it's opened for itself, or closed)
+sub overlayRestore()
+    if m.overlayHidden <> invalid then
+        for each ch in m.overlayHidden
+            ch.visible = true
+        end for
+    end if
+    m.overlayHidden = invalid
+    m.overlay = false
+    m.overlayLoading = false
+end sub
+
+sub overlayEnd()
+    if not isTrue(m.overlay) then return
+    m.top.request = { type: "overlayDone" }
 end sub
 
 sub refresh()
@@ -1004,6 +1080,10 @@ sub drawInfo()
             if anyStr(e.name) <> "" then line2 = line2 + " " + Chr(183) + " " + anyStr(e.name)
             if anyStr(e.plot) <> "" then plot = anyStr(e.plot)
             extra.Push(fmtLen(numv(e.duration)))
+            ' its picture, sound, bitrate and file, as far as they're known
+            extra.Push(fmtAv(e.av))
+            if Type(e.av) = "roAssociativeArray" then extra.Push(fmtRate(numv(e.av.kbps)))
+            extra.Push(fmtFile(e))
             if anyStr(e.aired) <> "" then extra.Push("First aired " + anyStr(e.aired))
             if e.id = anyStr(s["next"]) and not isTrue(e.watched) then extra.Push("Next up for you")
             if isTrue(e.watched) then extra.Push("Watched")
@@ -1016,7 +1096,7 @@ sub drawInfo()
         return
     end if
     if m.zone = "tabs" and m.focusTab = 4 then
-        setInfo("Search On Demand", "Press OK and type a title, a year or an actor", "Movies and TV shows", "Accents don't matter, the words can be in any order, and small typos still find it.", "")
+        setInfo("Search On Demand", "Press OK and type a title, a year or an actor", "Movies and TV shows", "Accents don't matter, the words can be in any order, and small typos still find it. Your last 5 searches are listed beside the keyboard.", "")
         return
     end if
     t = curItem()
@@ -1038,6 +1118,17 @@ sub drawInfo()
         m.infoTimer.control = "start"
     end if
 end sub
+
+' a movie's picture, sound, bitrate and file, as far as they're known: "4K HEVC HDR10 · 5.1 DD+ · 16.4 Mbps · MKV 42.1 GB"
+' (not read yet: what its file name or label says, e.g. "1080p H.264")
+function odStats(d as Object) as String
+    return joinParts([fmtAv(avOrHint(d)), fmtRate(numv(d.bitrate)), fmtFile(d)])
+end function
+
+function avOrHint(v as Object) as Dynamic
+    if Type(v.av) = "roAssociativeArray" then return v.av
+    return v.hint
+end function
 
 function srcName(d as Object) as String
     s = anyStr(d.source_name)
@@ -1083,11 +1174,20 @@ sub fill(t as Object, d as Dynamic)
         cast = joinParts([anyStr(d.actors), dir])
         src = srcName(d)
     end if
-    setInfo(anyStr(x.name), joinParts([anyStr(x.year), lenTxt, ratingStr(x.rating), genre]), joinParts([kind, src, listed, seen]), plot, cast)
+    stats = ""
+    if d <> invalid and movie then stats = odStats(d)
+    setInfo(anyStr(x.name), joinParts([anyStr(x.year), lenTxt, ratingStr(x.rating), genre]), joinParts([kind, stats, src, listed, seen]), plot, cast)
 end sub
 
 sub drawFoot()
-    if m.show <> invalid then
+    ' a panel open over the grid: its own keys, not the grid's
+    if kbIsOpen() then
+        m.footLbl.text = "OK  Type      Left  Recent searches      Replay  Delete      Play  Search      Back  Cancel"
+    else if pvIsOpen() then
+        m.footLbl.text = "Up/Down  Versions      OK  Play this version      Back  Close"
+    else if mdIsOpen() then
+        m.footLbl.text = "Up/Down  Buttons      OK  Select      Play  Play / Resume      Back  Close"
+    else if m.show <> invalid then
         m.footLbl.text = "OK  Episode options      Play  Play      *  My List      Left  Seasons      Back  All shows"
     else if m.zone = "tabs" then
         if m.focusTab = 4 then
@@ -1137,9 +1237,18 @@ sub movieDialog(d as Object)
     actions.Push("list")
     if isTrue(d.watched) then buttons.Push("Mark as not watched") else buttons.Push("Mark as watched")
     actions.Push("watched")
+    ' the same film under the playlist's other labels (languages, 4K...)
+    others = []
+    for each v in arr(d.versions)
+        if not isTrue(v.current) then others.Push(pvName(v, "no label"))
+    end for
+    if others.Count() > 0 then
+        buttons.Push("Other versions (" + others.Join(", ") + ")")
+        actions.Push("versions")
+    end if
     cat = anyStr(d.category)
     here = (m.show = invalid and m.tab = 0 and m.cats.Count() > m.cat and not m.cats[m.cat].all and m.cats[m.cat].key = cat)
-    if cat <> "" and not here then
+    if cat <> "" and not here and not isTrue(m.overlay) then
         buttons.Push("More in " + cat)
         actions.Push("more")
     end if
@@ -1147,17 +1256,179 @@ sub movieDialog(d as Object)
     actions.Push("close")
     genre = anyStr(d.genre)
     if genre = "" then genre = cat
-    msg = [joinParts(["Movie", anyStr(d.year), fmtLen(numv(d.duration)), genre])]
-    note = "From " + anyStr(d.source_name)
+    ' what it is, then (yellow) this copy's picture, sound and where it's from
+    meta = joinParts(["Movie", anyStr(d.year), fmtLen(numv(d.duration)), ratingStr(d.rating), genre])
+    note = joinParts([fmtAv(avOrHint(d)), fmtRate(numv(d.bitrate)), "From " + anyStr(d.source_name)])
     if resume then
         note = note + " " + Chr(183) + " You stopped at " + fmtDur(playPos)
     else if isTrue(d.watched) then
         note = note + " " + Chr(183) + " Watched"
     end if
-    msg.Push(note)
-    if anyStr(d.plot) <> "" then msg.Push(anyStr(d.plot))
-    dialog(anyStr(d.name), msg, buttons, actions, { kind: "movie", d: d })
+    m.md = { d: d, title: anyStr(d.name), meta: meta, note: note, plot: anyStr(d.plot), cast: anyStr(d.actors),
+             poster: posterUri(d), buttons: buttons, actions: actions, sel: 0, ctx: { kind: "movie", d: d } }
+    mdDraw()
 end sub
+
+' ============================================================ movie panel
+' A movie's details beside its buttons, so nothing has to scroll: poster on the left, the text in the middle
+' (what it is, this copy's picture and sound, the plot, the cast), the buttons on the right. Picking a button
+' does what the same button in a dialog does (dialogDo).
+function mdIsOpen() as Boolean
+    return Type(m.md) = "roAssociativeArray"
+end function
+
+sub mdClose()
+    m.md = invalid
+    if m.mdGroup <> invalid then
+        m.mdGroup.removeChildrenIndex(m.mdGroup.getChildCount(), 0)
+        m.mdGroup.visible = false
+        drawFoot()
+    end if
+end sub
+
+sub mdDraw()
+    g = m.mdGroup
+    g.removeChildrenIndex(g.getChildCount(), 0)
+    drawFoot()
+    if not mdIsOpen() then
+        g.visible = false
+        return
+    end if
+    md = m.md
+    g.visible = true
+    hl = thm("0xFFC845FF")
+    hlText = thm("0x111111FF")
+    white = thm("0xFFFFFFFF")
+    dimC = thm("0xA9BEE8FF")
+    bg = thm("0x0B1D46FF")
+    btnBg = thm("0x16306AFF")
+    edge = thm("0x4F86E8FF")
+
+    PW = 1680
+    PH = 700
+    PX = (1920 - PW) \ 2
+    PY = 190
+    PAD = 44
+    POW = 320           ' poster 2:3
+    POH = 480
+    BW = 440            ' buttons
+    BH = 66
+    BGAP = 10
+    TX = PX + PAD + POW + 44
+    BX = PX + PW - PAD - BW
+    TW = BX - 44 - TX
+
+    shade = CreateObject("roSGNode", "Rectangle")
+    shade.translation = [-200, -200]
+    shade.width = 2320
+    shade.height = 1480
+    shade.color = "0x000000A0"
+    g.appendChild(shade)
+    pvBox(g, PX, PY, PW, PH, bg, edge)
+
+    ' poster, over a plain box (shown when there's no artwork or it hasn't loaded)
+    pvBox(g, PX + PAD, PY + PAD, POW, POH, btnBg, "")
+    if md.poster <> "" then
+        p = CreateObject("roSGNode", "Poster")
+        p.translation = [PX + PAD, PY + PAD]
+        p.width = POW
+        p.height = POH
+        p.loadDisplayMode = "scaleToFit"
+        p.uri = md.poster
+        g.appendChild(p)
+    else
+        nm = mkLabel(PX + PAD + 16, PY + PAD, POW - 32, POH, md.title, 30, true, dimC)
+        nm.wrap = true
+        nm.horizAlign = "center"
+        g.appendChild(nm)
+    end if
+
+    ' the text
+    y = PY + PAD - 6
+    t = mkLabel(TX, y, TW, 0, md.title, 46, true, white)
+    t.wrap = true
+    t.maxLines = 2
+    t.vertAlign = "top"
+    g.appendChild(t)
+    y = y + Int(t.boundingRect().height) + 14
+    for each part in [{ s: md.meta, c: thm("0xDCE8FFFF"), z: 27, n: 2 }, { s: md.note, c: hl, z: 25, n: 2 }]
+        if part.s <> "" then
+            l = mkLabel(TX, y, TW, 0, part.s, part.z, false, part.c)
+            l.wrap = true
+            l.maxLines = part.n
+            l.vertAlign = "top"
+            g.appendChild(l)
+            y = y + Int(l.boundingRect().height) + 10
+        end if
+    end for
+    y = y + 12
+    castH = 0
+    if md.cast <> "" then castH = 76
+    bottom = PY + PH - PAD
+    if md.plot <> "" then
+        pl = mkLabel(TX, y, TW, bottom - castH - y, md.plot, 26, false, white)
+        pl.wrap = true
+        pl.vertAlign = "top"
+        pl.lineSpacing = 4
+        g.appendChild(pl)
+    end if
+    if md.cast <> "" then
+        c = mkLabel(TX, bottom - 66, TW, 66, md.cast, 22, false, dimC)
+        c.wrap = true
+        c.maxLines = 2
+        c.vertAlign = "bottom"
+        g.appendChild(c)
+    end if
+
+    ' the buttons
+    by = PY + PAD
+    for i = 0 to md.buttons.Count() - 1
+        sel = (i = md.sel)
+        fill = btnBg
+        fg = white
+        if sel then
+            fill = hl
+            fg = hlText
+        end if
+        pvBox(g, BX, by, BW, BH, fill, "")
+        g.appendChild(mkLabel(BX + 24, by, BW - 48, BH, md.buttons[i], 28, sel, fg))
+        by = by + BH + BGAP
+    end for
+end sub
+
+' keys while the movie panel is open
+function mdKey(key as String) as Boolean
+    md = m.md
+    n = md.buttons.Count()
+    if key = "back" then
+        mdClose()
+    else if key = "up" then
+        if md.sel > 0 then
+            md.sel = md.sel - 1
+            mdDraw()
+        end if
+    else if key = "down" then
+        if md.sel < n - 1 then
+            md.sel = md.sel + 1
+            mdDraw()
+        end if
+    else if key = "OK" or key = "play" then
+        ' Play on the remote: the first button (Resume / Play), wherever the highlight is
+        i = md.sel
+        if key = "play" then i = 0
+        a = md.actions[i]
+        if a = "versions" then
+            ' Pick a version over the panel: Back / Close comes back to it
+            openVersions(md.d)
+            return true
+        end if
+        ctx = md.ctx
+        mdClose()
+        m.pending = ctx
+        dialogDo(a)
+    end if
+    return true
+end function
 
 sub episodeDialog(show as Object, e as Object)
     playPos = numv(e.position)
@@ -1269,7 +1540,11 @@ sub starCurrent()
 end sub
 
 sub onDialogAction()
-    a = m.top.dialogAction
+    dialogDo(m.top.dialogAction)
+end sub
+
+' a button picked: in a dialog the scene showed, or in the movie panel
+sub dialogDo(a as String)
     p = m.pending
     m.pending = invalid
     if p = invalid or a = "close" or a = "" then return
@@ -1285,6 +1560,8 @@ sub onDialogAction()
             mark(d.id, not isTrue(d.watched))
         else if a = "more" then
             goCategory(anyStr(d.category))
+        else if a = "versions" then
+            openVersions(d)
         end if
     else if p.kind = "episode" then
         e = p.e
@@ -1316,6 +1593,593 @@ sub onDialogAction()
     end if
 end sub
 
+' ============================================================ Pick a version
+' A movie's other versions (languages, 4K...), drawn by this view as the web's Pick a version: one row per
+' version with its label and small tags (Your copy, Current), what's known of it underneath ("HEVC 10-bit ·
+' 5.1 AAC · 3.4 Mbps · MKV 2.4 GB") and the resolution / HDR as badges on the right (dim: only what the label
+' or file name says). It opens at once and fills in as TunerBox fetches each version's bitrate
+' (GET /api/vod/title/{id}/versions) and reads the picture and sound of the ones nobody has read yet, one at a
+' time (GET /api/vod/peek/{id}; Setup > Settings "vod_details": auto | ask | off). What TunerBox already knows
+' (played before, read by the library scan or another screen) comes with the list and isn't read again, and
+' what this Roku read is kept while the app runs.
+' When the playlist's only connection is this Roku's own live TV (the preview), that's paused for the reads
+' and comes back on by itself.
+' a version's name: its label ("EN", "4K-AMZ"), else "Your copy" for one of your own files, else where it is
+function pvName(v as Object, none as String) as String
+    n = anyStr(v.tag)
+    if n = "" and isTrue(v.mine) then n = "Your copy"
+    if n = "" then n = anyStr(v.where)
+    if n = "" then n = none
+    return n
+end function
+
+function pvClient() as String
+    if m.pvClient = invalid then m.pvClient = "roku-" + CreateObject("roDeviceInfo").GetChannelClientId()
+    return m.pvClient
+end function
+
+function pvMode() as String
+    md = anyStr(m.vodDetails)
+    if md = "" then md = "auto"
+    return md
+end function
+
+function pvIsOpen() as Boolean
+    ' m.pv doesn't exist until Pick a version first opens: checked on its own line, never in one "and"
+    if Type(m.pv) <> "roAssociativeArray" then return false
+    return isTrue(m.pv.open)
+end function
+
+' what's already known of a version (read here earlier) goes into ones TunerBox sent without it
+sub pvKnown(vs as Object)
+    if m.pvSeen = invalid then m.pvSeen = {}
+    for each v in vs
+        k = m.pvSeen[anyStr(v.id)]
+        if k <> invalid and Type(v.av) <> "roAssociativeArray" then
+            v.av = k.av
+            if numv(v.bitrate) <= 0 then v.bitrate = k.bitrate
+            if numv(v.duration) <= 0 then v.duration = k.duration
+        end if
+    end for
+end sub
+
+function pvUnread(vs as Object) as Boolean
+    for each v in vs
+        if Type(v.av) <> "roAssociativeArray" then return true
+    end for
+    return false
+end function
+
+sub openVersions(d as Object)
+    m.pvSeq = numv(m.pvSeq) + 1
+    ' a movie: into the other version from where this one was stopped (else wherever that one was left)
+    at = -1
+    if not isTrue(d.watched) and numv(d.position) > m.RESUME_MIN then at = numv(d.position)
+    vs = arr(d.versions)
+    pvKnown(vs)
+    note = "Pick a version"
+    if anyStr(d.kind) <> "series" and pvMode() = "auto" and pvUnread(vs) then note = note + " " + Chr(183) + " checking each one..."
+    m.pv = { d: d, vs: vs, tag: "pv" + Int(m.pvSeq).ToStr(), open: true, reading: true, held: false,
+             at: at, queue: [], force: false, note: note, sel: 0, waitId: "" }
+    ' start on the version playing / picked last
+    for i = 0 to vs.Count() - 1
+        if isTrue(vs[i].current) then m.pv.sel = i
+    end for
+    pvDraw()
+    api("pvlist", "/api/vod/title/" + urlEncode(anyStr(d.id)) + "/versions", invalid, { tag: m.pv.tag })
+end sub
+
+' the rows: { kind: "v", v, label } per version, then Read details (again) and Close
+function pvRows() as Object
+    pv = m.pv
+    vs = pv.vs
+    rows = []
+    ' index loops, not "for each": a "for each" over vs inside another over vs shares the array's one
+    ' iterator, so the outer loop ended after the first version (Pick a version listed only one)
+    for vi = 0 to vs.Count() - 1
+        v = vs[vi]
+        name = pvName(v, "No label")
+        ' a provider can list the same label twice: number them, and say which is newer
+        same = []
+        for xi = 0 to vs.Count() - 1
+            if pvName(vs[xi], "No label") = name then same.Push(vs[xi])
+        end for
+        label = name
+        if same.Count() > 1 then
+            for i = 0 to same.Count() - 1
+                if anyStr(same[i].id) = anyStr(v.id) then label = name + " (" + (i + 1).ToStr() + ")"
+            end for
+            if numv(v.added) > 0 then
+                dt = CreateObject("roDateTime")
+                dt.FromSeconds(Int(numv(v.added)))
+                ds = dt.AsDateString("short-month-no-weekday")      ' "Nov 20, 2026"
+                label = label + " " + Chr(183) + " added " + Left(ds, 3) + " " + Right(ds, 4)
+            end if
+        end if
+        rows.Push({ kind: "v", v: v, label: label })
+    end for
+    ' Reading each version's picture and sound. "Only when I ask": always offered (read the ones not read yet,
+    ' else read them all again). Automatically: only when some couldn't be read (no connection free, slow provider)
+    md = pvMode()
+    if not pv.reading and anyStr(pv.d.kind) <> "series" and md <> "off" then
+        unread = false
+        failed = false
+        for each v in vs
+            if Type(v.av) <> "roAssociativeArray" then
+                if anyStr(v.why) <> "" then failed = true
+                if anyStr(v.why) <> "" or md = "ask" then unread = true
+            end if
+        end for
+        if unread then
+            t = "Read video quality"
+            if failed then t = "Read video quality again"
+            rows.Push({ kind: "again", label: t, again: false })
+        else if md = "ask" then
+            rows.Push({ kind: "again", label: "Read video quality again", again: true })
+        end if
+    end if
+    rows.Push({ kind: "close", label: "Close" })
+    return rows
+end function
+
+' a version's details line: codec, sound, bitrate, length (only when the versions' lengths differ), file
+function pvMeta(v as Object, lenDiffers as Boolean) as String
+    av = avOrHint(v)
+    meta = []
+    if Type(av) = "roAssociativeArray" then
+        pic = [avVcodec(anyStr(av.vcodec))]
+        if numv(av.bits) >= 10 and anyStr(av.hdr) = "" then pic.Push(Int(numv(av.bits)).ToStr() + "-bit")
+        meta.Push(spaceJoin(pic))
+        lay = anyStr(av.layout)
+        if lay = "stereo" then lay = "Stereo"
+        if lay = "mono" then lay = "Mono"
+        meta.Push(spaceJoin([lay, avAcodec(anyStr(av.acodec))]))
+    end if
+    meta.Push(fmtRate(numv(v.bitrate)))
+    if isTrue(v.len_unknown) then
+        meta.Push("length unknown")
+    else if lenDiffers then
+        meta.Push(fmtLen(numv(v.duration)))
+    end if
+    meta.Push(fmtFile(v))
+    if anyStr(v.where) <> "" then meta.Push("from " + anyStr(v.where))
+    info = joinParts(meta)
+    if isTrue(v.checking) then
+        info = joinParts([info, "Reading..."])
+    else if anyStr(v.why) <> "" then
+        info = joinParts([info, anyStr(v.why)])
+    else if info = "" then
+        info = "No details yet"
+    end if
+    if Type(v.av) <> "roAssociativeArray" and Type(v.hint) = "roAssociativeArray" then
+        if isTrue(v.mine) then info = joinParts([info, "from the file name"]) else info = joinParts([info, "from its label"])
+    end if
+    return info
+end function
+
+' a small rounded label (a tag after the name, or a badge on the right) -> its width
+function pvChip(g as Object, x as Integer, y as Integer, h as Integer, text as String, size as Integer, fill as String, edge as String, color as String) as Integer
+    lbl = mkLabel(0, y, 0, h, text, size, true, color)
+    w = Int(lbl.boundingRect().width) + 28
+    pvBox(g, x, y, w, h, fill, edge)
+    lbl.translation = [x, y]
+    lbl.width = w
+    lbl.horizAlign = "center"
+    g.appendChild(lbl)
+    return w
+end function
+
+sub pvDraw()
+    g = m.pvGroup
+    g.removeChildrenIndex(g.getChildCount(), 0)
+    drawFoot()
+    if not pvIsOpen() then
+        g.visible = false
+        return
+    end if
+    pv = m.pv
+    g.visible = true
+    rows = pvRows()
+    if pv.sel > rows.Count() - 1 then pv.sel = rows.Count() - 1
+    if pv.sel < 0 then pv.sel = 0
+    ' lengths only when they differ (another cut, a PAL copy): otherwise they'd just repeat
+    lo = 0
+    hi = 0
+    n = 0
+    for each v in pv.vs
+        l = numv(v.duration)
+        if l > 0 then
+            if n = 0 or l < lo then lo = l
+            if l > hi then hi = l
+            n = n + 1
+        end if
+    end for
+    lenDiffers = (n > 1 and hi - lo > 120)
+
+    hl = thm("0xFFC845FF")
+    hlText = thm("0x111111FF")
+    white = thm("0xFFFFFFFF")
+    dimC = thm("0x9FB3DCFF")
+    bg = thm("0x0B1D46FF")
+    edge = thm("0x4F86E8FF")
+    VH = 116            ' a version's row
+    XH = 74             ' Read details / Close
+    GAP = 6
+    MAXV = 6            ' versions shown at once (the rest scroll)
+
+    ' which rows show: all of them, or a window of the versions around the highlight (extras always shown)
+    nv = 0
+    for each r in rows
+        if r.kind = "v" then nv = nv + 1
+    end for
+    first = 0
+    if nv > MAXV then
+        first = pv.sel - MAXV + 1
+        if pv.sel >= nv then first = nv - MAXV
+        if first < 0 then first = 0
+        if first > nv - MAXV then first = nv - MAXV
+    end if
+    shown = []
+    for i = 0 to rows.Count() - 1
+        if rows[i].kind <> "v" or (i >= first and i < first + MAXV) then shown.Push(i)
+    end for
+    listH = 0
+    for each i in shown
+        if rows[i].kind = "v" then listH = listH + VH + GAP else listH = listH + XH + GAP + 8
+    end for
+
+    PW = 1200
+    PH = 150 + listH + 24
+    PX = (1920 - PW) \ 2
+    PY = (1080 - PH) \ 2
+    if PY < 40 then PY = 40
+
+    shade = CreateObject("roSGNode", "Rectangle")
+    shade.translation = [-200, -200]
+    shade.width = 2320
+    shade.height = 1480
+    shade.color = "0x000000A0"
+    g.appendChild(shade)
+    pvBox(g, PX, PY, PW, PH, bg, edge)
+
+    d = pv.d
+    title = anyStr(d.name)
+    if anyStr(d.year) <> "" then title = title + " (" + anyStr(d.year) + ")"
+    g.appendChild(mkLabel(PX + 40, PY + 26, PW - 80, 60, title, 44, true, white))
+    g.appendChild(mkLabel(PX + 40, PY + 90, PW - 80, 36, pv.note, 26, false, dimC))
+    if first > 0 then g.appendChild(mkLabel(PX + PW - 140, PY + 90, 100, 36, "more up", 22, false, dimC))
+
+    y = PY + 140
+    RX = PX + 24
+    RW = PW - 48
+    for each i in shown
+        r = rows[i]
+        sel = (i = pv.sel)
+        fg = white
+        sub2 = dimC
+        if sel then
+            fg = hlText
+            sub2 = hlText
+        end if
+        if r.kind = "v" then
+            if sel then pvBox(g, RX, y, RW, VH, hl, "")
+            v = r.v
+            ' badges on the right: resolution and HDR (dim outline: only what the label / file name says)
+            av = avOrHint(v)
+            guess = (Type(v.av) <> "roAssociativeArray" and Type(v.hint) = "roAssociativeArray")
+            badges = []
+            res = avRes(av)
+            if res <> "" then badges.Push({ t: res, k: res })
+            if Type(av) = "roAssociativeArray" and anyStr(av.hdr) <> "" then badges.Push({ t: anyStr(av.hdr), k: "hdr" })
+            bx = RX + RW - 24
+            for j = badges.Count() - 1 to 0 step -1
+                b = badges[j]
+                fill = bg
+                ln = edge
+                col = white
+                if sel then
+                    fill = hl
+                    ln = hlText
+                    col = hlText
+                end if
+                if guess then
+                    ln = dimC
+                    col = dimC
+                    if sel then
+                        ln = hlText
+                        col = hlText
+                    end if
+                else if b.k = "4K" then
+                    fill = white
+                    ln = ""
+                    col = bg
+                    if sel then
+                        fill = hlText
+                        col = hl
+                    end if
+                else if b.k = "hdr" then
+                    fill = "0x9B6BFFFF"
+                    ln = ""
+                    col = "0xFFFFFFFF"
+                    if sel then
+                        fill = hlText
+                        col = hl
+                    end if
+                end if
+                tmp = mkLabel(0, 0, 0, 40, b.t, 22, true, col)
+                bw = Int(tmp.boundingRect().width) + 28
+                bx = bx - bw
+                pvChip(g, bx, y + (VH - 40) \ 2, 40, b.t, 22, fill, ln, col)
+                bx = bx - 10
+            end for
+            ' the name, then its tags
+            nameLbl = mkLabel(RX + 24, y + 14, 0, 50, r.label, 34, true, fg)
+            nw = Int(nameLbl.boundingRect().width)
+            maxName = bx - (RX + 24) - 330
+            if nw > maxName then
+                nameLbl.width = maxName
+                nw = maxName
+            end if
+            g.appendChild(nameLbl)
+            tx = RX + 24 + nw + 18
+            ' "Your copy" as a tag only when the name is a label (otherwise the name already says it)
+            if isTrue(v.mine) and anyStr(v.tag) <> "" then
+                tf = "0xFFFFFF26"
+                if sel then tf = "0x00000026"
+                tx = tx + pvChip(g, tx, y + 23, 32, "YOUR COPY", 18, tf, "", fg) + 10
+            end if
+            if isTrue(v.current) then
+                tf = bg
+                tl = edge
+                tc = dimC
+                if sel then
+                    tf = hl
+                    tl = hlText
+                    tc = hlText
+                end if
+                pvChip(g, tx, y + 23, 32, "CURRENT", 18, tf, tl, tc)
+            end if
+            ' what's known of it underneath
+            meta = mkLabel(RX + 24, y + 66, bx - (RX + 24) - 10, 36, pvMeta(v, lenDiffers), 24, false, sub2)
+            if isTrue(v.checking) and not sel then meta.color = white
+            g.appendChild(meta)
+            y = y + VH + GAP
+        else
+            ' Close and Read details: buttons under the versions (outlined; filled when highlighted)
+            y = y + 8
+            if sel then
+                pvBox(g, RX, y, RW, XH, hl, "")
+            else
+                pvBox(g, RX, y, RW, XH, bg, edge)
+            end if
+            c = fg
+            bl = mkLabel(RX + 24, y, RW - 48, XH, r.label, 30, sel, c)
+            bl.horizAlign = "center"
+            g.appendChild(bl)
+            y = y + XH + GAP
+        end if
+    end for
+end sub
+
+' keys while Pick a version is open
+function pvKey(key as String) as Boolean
+    pv = m.pv
+    rows = pvRows()
+    if key = "back" then
+        pvClose()
+    else if key = "up" then
+        if pv.sel > 0 then
+            pv.sel = pv.sel - 1
+            pvDraw()
+        end if
+    else if key = "down" then
+        if pv.sel < rows.Count() - 1 then
+            pv.sel = pv.sel + 1
+            pvDraw()
+        end if
+    else if key = "OK" or key = "play" then
+        if pv.sel < rows.Count() then pvPick(rows[pv.sel])
+    end if
+    return true
+end function
+
+sub pvPick(r as Object)
+    pv = m.pv
+    if r.kind = "close" then
+        pvClose()
+        return
+    end if
+    if r.kind = "again" then
+        pvRead(true, isTrue(r.again))
+        return
+    end if
+    v = r.v
+    mdClose()               ' the movie panel under it: done
+    pv.open = false
+    pv.held = false         ' what plays next is this version: live TV doesn't come back first (playVod forgets it)
+    pvDraw()
+    if isTrue(v.current) or pv.at < 0 then
+        play(anyStr(v.id), -1)
+        return
+    end if
+    here = invalid
+    for each x in pv.vs
+        if isTrue(x.current) then here = x
+    end for
+    lenHere = numv(pv.d.duration)
+    if here <> invalid and numv(here.duration) > 0 then lenHere = numv(here.duration)
+    play(anyStr(v.id), pvSamePoint(pv.at, lenHere, numv(v.duration)))
+end sub
+
+' where `at` seconds into a copy `lenFrom` long falls in a copy `lenTo` long. Only a 24 fps film against a 25 fps
+' (PAL) copy of it is scaled: the same frames run 4% faster, so lengths differ by 24/25. Any other difference
+' (another cut, credits left off) keeps the seconds as they are.
+function pvSamePoint(at as Float, lenFrom as Float, lenTo as Float) as Float
+    r = 1.0
+    if lenFrom > 0 and lenTo > 0 then r = lenTo / lenFrom
+    if (r >= 0.95 and r <= 0.97) or (r >= 1 / 0.97 and r <= 1 / 0.95) then return Int(at * r + 0.5)
+    return at
+end function
+
+sub pvClose()
+    pv = m.pv
+    if pv = invalid then return
+    pv.open = false
+    pvDraw()
+    pvRelease()
+end sub
+
+' live TV paused for the reads: back on
+sub pvRelease()
+    if Type(m.pv) <> "roAssociativeArray" then return
+    if isTrue(m.pv.held) then
+        m.pv.held = false
+        m.top.request = { type: "pvresume" }
+    end if
+end sub
+
+sub gotPvList(r as Object, ctx as Object)
+    if not pvIsOpen() then return
+    pv = m.pv
+    if anyStr(ctx.tag) <> anyStr(pv.tag) then return
+    if r.ok and Type(r.data) = "roArray" and r.data.Count() > 0 then
+        ' the highlight stays on the same version when the list comes back in another order
+        selId = ""
+        if pv.sel < pv.vs.Count() then selId = anyStr(pv.vs[pv.sel].id)
+        pv.vs = r.data
+        pvKnown(pv.vs)
+        for i = 0 to pv.vs.Count() - 1
+            if anyStr(pv.vs[i].id) = selId then pv.sel = i
+        end for
+    end if
+    if anyStr(pv.d.kind) <> "series" and pvMode() = "auto" then
+        pvRead(false, false)
+    else
+        pv.reading = false
+        pv.note = "Pick a version"
+        pvDraw()
+    end if
+end sub
+
+' read each version not read yet, one at a time
+' again: every version, the ones read already too (what each file says now); else the ones not read yet
+sub pvRead(force as Boolean, again as Boolean)
+    pv = m.pv
+    pv.reading = true
+    pv.force = force
+    pv.again = again
+    pv.queue = []
+    for each v in pv.vs
+        if again or Type(v.av) <> "roAssociativeArray" then pv.queue.Push(anyStr(v.id))
+    end for
+    if pv.queue.Count() > 0 then pv.note = "Pick a version " + Chr(183) + " reading each one..."
+    pvNext()
+end sub
+
+sub pvNext()
+    pv = m.pv
+    if not pv.open then
+        pvRelease()
+        return
+    end if
+    if pv.queue.Count() = 0 then
+        pv.reading = false
+        pv.note = "Pick a version"
+        pvDraw()
+        pvRelease()
+        return
+    end if
+    id = pv.queue.Shift()
+    pvMark(id, { checking: true, why: "" })
+    pvDraw()
+    pvPeek(id, false)
+end sub
+
+sub pvPeek(id as String, retry as Boolean)
+    f = ""
+    if m.pv.force then f = "&force=1"
+    if isTrue(m.pv.again) then f = f + "&again=1"
+    api("pvpeek", "/api/vod/peek/" + urlEncode(id) + "?client=" + urlEncode(pvClient()) + f, invalid, { tag: m.pv.tag, id: id, retry: retry })
+end sub
+
+sub pvMark(id as String, more as Object)
+    for each v in m.pv.vs
+        if anyStr(v.id) = id then v.Append(more)
+    end for
+end sub
+
+sub gotPvPeek(r as Object, ctx as Object)
+    pv = m.pv
+    if pv = invalid or anyStr(ctx.tag) <> pv.tag then return
+    id = anyStr(ctx.id)
+    got = invalid
+    if r.ok and Type(r.data) = "roAssociativeArray" then got = r.data
+    ' kept for this app run: the next Pick a version doesn't ask again
+    if got <> invalid and Type(got.av) = "roAssociativeArray" then
+        if m.pvSeen = invalid then m.pvSeen = {}
+        m.pvSeen[id] = { av: got.av, bitrate: got.bitrate, duration: got.duration }
+    end if
+    if not pv.open then
+        pvRelease()
+        return
+    end if
+    if got = invalid then got = { why: "Could not reach TunerBox" }
+    ' the playlist's connection is this Roku's own live TV: pause it, tell TunerBox it's let go, then read
+    if isTrue(got.mine) and not isTrue(ctx.retry) and not pv.held then
+        pv.waitId = id
+        m.top.request = { type: "pvhold" }
+        return
+    end if
+    got.Delete("mine")
+    got.Delete("id")
+    got.checking = false
+    pvMark(id, got)
+    pvNext()
+end sub
+
+' the scene's answer to pvhold: true when live TV was paused
+sub onPvHeld()
+    pv = m.pv
+    if pv = invalid or anyStr(pv.waitId) = "" then return
+    id = pv.waitId
+    if m.top.pvHeld then pv.held = true
+    if not pv.open then
+        pv.waitId = ""
+        pvRelease()
+        return
+    end if
+    if not m.top.pvHeld then
+        ' nothing here to let go of (an event feed): say why
+        pv.waitId = ""
+        pvMark(id, { checking: false, why: "This screen is using the playlist's connection" })
+        pvNext()
+        return
+    end if
+    pv.note = "Pick a version " + Chr(183) + " paused live TV to read each one..."
+    pvDraw()
+    api("pvstop", "/api/stop", { client: pvClient() }, { tag: pv.tag })
+end sub
+
+' TunerBox let go of the live stream: some providers take a moment to see it closed
+sub gotPvStop(ctx as Object)
+    if Type(m.pv) <> "roAssociativeArray" then return
+    if anyStr(ctx.tag) <> anyStr(m.pv.tag) then return
+    m.pvTimer.control = "stop"
+    m.pvTimer.control = "start"
+end sub
+
+sub onPvTimer()
+    pv = m.pv
+    if pv = invalid or anyStr(pv.waitId) = "" then return
+    id = pv.waitId
+    pv.waitId = ""
+    if not pv.open then
+        pvRelease()
+        return
+    end if
+    pvPeek(id, true)
+end sub
+
 sub goCategory(name as String)
     m.show = invalid
     m.tab = 0
@@ -1327,8 +2191,13 @@ end sub
 
 ' ============================================================ search
 sub onSearchText()
-    q = m.top.searchText.Trim()
+    runSearch(m.top.searchText)
+end sub
+
+sub runSearch(q as String)
+    q = q.Trim()
     if q = "" then return
+    addRecentSearch(q)
     m.searchQ = q
     m.searchItems = []
     m.show = invalid
@@ -1342,6 +2211,274 @@ sub onSearchText()
     api("search", "/api/vod/search?q=" + urlEncode(q) + "&limit=100", invalid, { q: q })
     render()
 end sub
+
+' ============================================================ search keyboard
+' The last 5 searches down the left, a keyboard drawn here on the right, Search and Cancel under it.
+' Drawn rather than the Roku's own keyboard so every key comes here: Left from the first column goes to the
+' recent searches (the Roku keyboard kept Left for itself). Typing on the Roku phone app works too (Lit_ keys),
+' Instant Replay deletes a letter, Play searches from anywhere.
+function kbIsOpen() as Boolean
+    return Type(m.kb) = "roAssociativeArray"
+end function
+
+
+' the bottom row's wide keys: Space (columns 0-2), Delete (3-4), Clear (5-6) -> { id, first column, width }
+function kbWide(c as Integer) as Object
+    if c <= 2 then return { id: "space", label: "Space", c0: 0, n: 3 }
+    if c <= 4 then return { id: "del", label: "Delete", c0: 3, n: 2 }
+    return { id: "clear", label: "Clear", c0: 5, n: 2 }
+end function
+
+sub kbOpen()
+    g = m.kbGroup
+    g.removeChildrenIndex(g.getChildCount(), 0)
+    back = CreateObject("roSGNode", "Group")
+    front = CreateObject("roSGNode", "Group")
+    g.appendChild(back)
+    g.appendChild(front)
+    m.kb = { text: m.searchQ, back: back, front: front, recent: recentSearches(), zone: "keys", r: 0, c: 0, sel: 0 }
+    g.visible = true
+
+    keyW = 84               ' a key
+    keyH = 70
+    keyGap = 8
+    gridW = 7 * keyW + 6 * keyGap
+    TH = 76                 ' the text typed
+    gridH = TH + 24 + 7 * keyH + 6 * keyGap
+    PAD = 48
+    LW = 480                ' the recent searches
+    GAPC = 56
+    BH = 66                 ' Search / Cancel
+    PW = PAD + LW + GAPC + gridW + PAD
+    PH = PAD + 70 + gridH + 28 + BH + PAD
+    PX = (1920 - PW) \ 2
+    PY = (1080 - PH) \ 2
+    if PY < 20 then PY = 20
+    CY = PY + PAD + 70
+    KX = PX + PAD + LW + GAPC
+    m.kb.lay = { PX: PX, PY: PY, CY: CY, KX: KX, gridW: gridW, TH: TH, keyW: keyW, keyH: keyH, keyGap: keyGap, GY: CY + TH + 24,
+                 LX: PX + PAD, LW: LW, BH: BH, BY: CY + gridH + 28 }
+
+    shade = CreateObject("roSGNode", "Rectangle")
+    shade.translation = [-200, -200]
+    shade.width = 2320
+    shade.height = 1480
+    shade.color = "0x000000A0"
+    back.appendChild(shade)
+    pvBox(back, PX, PY, PW, PH, thm("0x0B1D46FF"), thm("0x4F86E8FF"))
+    back.appendChild(mkLabel(PX + PAD, PY + PAD - 8, PW - 2 * PAD, 60, "Search On Demand", 44, true, thm("0xFFFFFFFF")))
+    kbDraw()
+    m.top.setFocus(true)
+end sub
+
+sub kbClose()
+    m.kb = invalid
+    if m.kbGroup <> invalid then
+        m.kbGroup.removeChildrenIndex(m.kbGroup.getChildCount(), 0)
+        m.kbGroup.visible = false
+    end if
+    drawFoot()
+end sub
+
+' a key: a rounded box, highlighted or not, with its label in the middle
+sub kbKeyBox(f as Object, x as Integer, y as Integer, w as Integer, h as Integer, text as String, sel as Boolean, size as Integer)
+    if sel then
+        pvBox(f, x, y, w, h, thm("0xFFC845FF"), "")
+    else
+        pvBox(f, x, y, w, h, thm("0x16306AFF"), "")
+    end if
+    c = thm("0xFFFFFFFF")
+    if sel then c = thm("0x111111FF")
+    lb = mkLabel(x, y, w, h, text, size, sel, c)
+    lb.horizAlign = "center"
+    f.appendChild(lb)
+end sub
+
+sub kbDraw()
+    kb = m.kb
+    L = kb.lay
+    f = kb.front
+    f.removeChildrenIndex(f.getChildCount(), 0)
+    drawFoot()
+    white = thm("0xFFFFFFFF")
+    dimC = thm("0xA9BEE8FF")
+
+    ' recent searches
+    f.appendChild(mkLabel(L.LX, L.CY, L.LW, 36, "RECENT SEARCHES", 22, true, dimC))
+    y = L.CY + 50
+    if kb.recent.Count() = 0 then
+        nl = mkLabel(L.LX, y, L.LW, 0, "Searches you make show up here.", 26, false, dimC)
+        nl.wrap = true
+        nl.vertAlign = "top"
+        f.appendChild(nl)
+    end if
+    for i = 0 to kb.recent.Count() - 1
+        sel = (kb.zone = "recent" and kb.sel = i)
+        if sel then
+            pvBox(f, L.LX, y, L.LW, 66, thm("0xFFC845FF"), "")
+        else
+            pvBox(f, L.LX, y, L.LW, 66, thm("0x16306AFF"), "")
+        end if
+        c = white
+        if sel then c = thm("0x111111FF")
+        f.appendChild(mkLabel(L.LX + 22, y, L.LW - 44, 66, anyStr(kb.recent[i]), 28, sel, c))
+        y = y + 66 + 10
+    end for
+
+    ' what's typed, with a cursor
+    pvBox(f, L.KX, L.CY, L.gridW, L.TH, thm("0x06132FFF"), thm("0x4F86E8FF"))
+    if kb.text = "" then
+        f.appendChild(mkLabel(L.KX + 22, L.CY, L.gridW - 44, L.TH, "A title, a year or an actor", 28, false, dimC))
+    else
+        f.appendChild(mkLabel(L.KX + 22, L.CY, L.gridW - 44, L.TH, kb.text + "_", 32, false, white))
+    end if
+
+    ' the keys
+    rows = kbRows()
+    onKeys = (kb.zone = "keys")
+    for r = 0 to rows.Count() - 1
+        ky = L.GY + r * (L.keyH + L.keyGap)
+        for c = 0 to 6
+            kx = L.KX + c * (L.keyW + L.keyGap)
+            kbKeyBox(f, kx, ky, L.keyW, L.keyH, Mid(rows[r], c + 1, 1), onKeys and kb.r = r and kb.c = c, 32)
+        end for
+    end for
+    ky = L.GY + rows.Count() * (L.keyH + L.keyGap)
+    for each c0 in [0, 3, 5]
+        w = kbWide(c0)
+        kx = L.KX + w.c0 * (L.keyW + L.keyGap)
+        ww = w.n * L.keyW + (w.n - 1) * L.keyGap
+        kbKeyBox(f, kx, ky, ww, L.keyH, w.label, onKeys and kb.r = rows.Count() and kbWide(kb.c).id = w.id, 28)
+    end for
+
+    ' Search and Cancel under the keyboard
+    x = L.KX
+    names = ["Search", "Cancel"]
+    widths = [300, 220]
+    for i = 0 to 1
+        kbKeyBox(f, x, L.BY, widths[i], L.BH, names[i], kb.zone = "go" and kb.sel = i, 28)
+        x = x + widths[i] + 16
+    end for
+end sub
+
+sub kbGo(q as String)
+    kbClose()
+    runSearch(q)
+end sub
+
+sub kbType(ch as String)
+    if Len(m.kb.text) < 80 then m.kb.text = m.kb.text + ch
+end sub
+
+sub kbDelete()
+    t = m.kb.text
+    if Len(t) > 0 then m.kb.text = Left(t, Len(t) - 1)
+end sub
+
+' every key while Search On Demand is open
+function kbKey(key as String) as Boolean
+    kb = m.kb
+    n = kb.recent.Count()
+    last = kbRows().Count()        ' the Space / Delete / Clear row
+    if key = "back" then
+        kbClose()
+        return true
+    end if
+    if key = "play" or key = "enter" then
+        kbGo(kb.text)
+        return true
+    end if
+    ' a keyboard on the Roku phone app: its letters come as "Lit_a"
+    if Left(key, 4) = "Lit_" then
+        kbType(LCase(Mid(key, 5)))
+        kbDraw()
+        return true
+    end if
+    if key = "backspace" or key = "replay" then
+        kbDelete()
+        kbDraw()
+        return true
+    end if
+    if kb.zone = "keys" then
+        if key = "left" then
+            if kb.r = last then
+                if kbWide(kb.c).c0 > 0 then
+                    kb.c = kbWide(kbWide(kb.c).c0 - 1).c0
+                else if n > 0 then
+                    kb.zone = "recent"
+                    kb.sel = 0
+                end if
+            else if kb.c > 0 then
+                kb.c = kb.c - 1
+            else if n > 0 then
+                kb.zone = "recent"
+                kb.sel = 0
+            end if
+        else if key = "right" then
+            if kb.r = last then
+                w = kbWide(kb.c)
+                if w.c0 + w.n <= 6 then kb.c = w.c0 + w.n
+            else if kb.c < 6 then
+                kb.c = kb.c + 1
+            end if
+        else if key = "up" then
+            if kb.r > 0 then kb.r = kb.r - 1
+        else if key = "down" then
+            if kb.r < last then
+                kb.r = kb.r + 1
+            else
+                kb.zone = "go"
+                kb.sel = 0
+            end if
+        else if key = "OK" then
+            if kb.r = last then
+                id = kbWide(kb.c).id
+                if id = "space" then
+                    if kb.text <> "" and Right(kb.text, 1) <> " " then kbType(" ")
+                else if id = "del" then
+                    kbDelete()
+                else
+                    kb.text = ""
+                end if
+            else
+                kbType(Mid(kbRows()[kb.r], kb.c + 1, 1))
+            end if
+        end if
+    else if kb.zone = "recent" then
+        if key = "up" and kb.sel > 0 then
+            kb.sel = kb.sel - 1
+        else if key = "down" and kb.sel < n - 1 then
+            kb.sel = kb.sel + 1
+        else if key = "right" then
+            kb.zone = "keys"
+            kb.c = 0
+            if kb.r = last then kb.c = 0
+        else if key = "OK" then
+            kbGo(anyStr(kb.recent[kb.sel]))
+            return true
+        end if
+    else if kb.zone = "go" then
+        if key = "left" then
+            if kb.sel > 0 then
+                kb.sel = 0
+            else if n > 0 then
+                kb.zone = "recent"
+                kb.sel = 0
+            end if
+        else if key = "right" and kb.sel < 1 then
+            kb.sel = 1
+        else if key = "up" then
+            kb.zone = "keys"
+            kb.r = last
+            kb.c = 0
+        else if key = "OK" then
+            if kb.sel = 0 then kbGo(kb.text) else kbClose()
+            return true
+        end if
+    end if
+    kbDraw()
+    return true
+end function
 
 ' ============================================================ keys
 sub useTab(i as Integer)
@@ -1495,6 +2632,22 @@ end function
 function onKeyEvent(key as String, press as Boolean) as Boolean
     if not press then return false
     if not m.top.visible then return false
+    if isTrue(m.overlay) then
+        if pvIsOpen() then
+            pvKey(key)
+        else if mdIsOpen() then
+            mdKey(key)
+        else if key = "back" then
+            overlayEnd()
+            return true
+        end if
+        ' both panels closed (Close, Back, a button done): back to Search
+        if not pvIsOpen() and not mdIsOpen() and not m.overlayLoading then overlayEnd()
+        return true
+    end if
+    if pvIsOpen() then return pvKey(key)
+    if mdIsOpen() then return mdKey(key)
+    if kbIsOpen() then return kbKey(key)
 
     if key = "back" then
         if m.show <> invalid then
@@ -1519,7 +2672,7 @@ function onKeyEvent(key as String, press as Boolean) as Boolean
             focusTabTo(m.focusTab + 1)
         else if key = "OK" then
             if m.focusTab = 4 then
-                m.top.request = { type: "keyboard", text: m.searchQ }
+                kbOpen()
             else
                 useTab(m.focusTab)
                 if m.items.Count() > 0 then

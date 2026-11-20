@@ -13,6 +13,56 @@ sub regWrite(key as String, value as String)
     sec.Flush()
 end sub
 
+' searches typed lately, the latest first (at most 5). list: "vodRecent" (On Demand) or "searchRecent" (Search)
+function recentSearches(list = "vodRecent" as String) as Object
+    v = ParseJson(regRead(list, "[]"))
+    if Type(v) <> "roArray" then return []
+    return v
+end function
+
+' remember a search: to the front, an earlier one with the same words (any case) dropped, 5 kept
+sub addRecentSearch(q as String, list = "vodRecent" as String)
+    q = q.Trim()
+    if q = "" then return
+    out = [q]
+    for each s in recentSearches(list)
+        if out.Count() >= 5 then exit for
+        if LCase(anyStr(s)) <> LCase(q) then out.Push(s)
+    end for
+    regWrite(list, FormatJson(out))
+end sub
+
+' ------------------------------------------------------------ drawing shared by the panels
+' a rounded box: fill, or (edge <> "") a 2px outline around the fill
+function pvBox(g as Object, x as Integer, y as Integer, w as Integer, h as Integer, fill as String, edge as String) as Object
+    if edge <> "" then
+        o = CreateObject("roSGNode", "Poster")
+        o.uri = "pkg:/images/round.9.png"
+        o.translation = [x, y]
+        o.width = w
+        o.height = h
+        o.blendColor = edge
+        g.appendChild(o)
+        x = x + 2
+        y = y + 2
+        w = w - 4
+        h = h - 4
+    end if
+    p = CreateObject("roSGNode", "Poster")
+    p.uri = "pkg:/images/round.9.png"
+    p.translation = [x, y]
+    p.width = w
+    p.height = h
+    p.blendColor = fill
+    g.appendChild(p)
+    return p
+end function
+
+' the on-screen keyboard's letters (Search and Search On Demand), then a row of Space / Delete / Clear
+function kbRows() as Object
+    return ["abcdefg", "hijklmn", "opqrstu", "vwxyz-'", "1234567", "890.&:!"]
+end function
+
 ' "192.168.1.50" -> "http://192.168.1.50:8642"
 function normalizeBase(raw as String) as String
     s = raw.Trim()
@@ -164,6 +214,84 @@ function fmtLen(secs as Float) as String
     if mins <= 0 then return ""
     if mins < 60 then return mins.ToStr() + " min"
     return (mins \ 60).ToStr() + "h " + (mins mod 60).ToStr() + "m"
+end function
+
+' ------------------------------------------------------------ On Demand: a version's picture, sound and file
+' the parts that aren't empty, joined with " · "
+function nonEmptyJoin(parts as Object) as String
+    out = []
+    for each p in parts
+        if p <> invalid and p <> "" then out.Push(p)
+    end for
+    return out.Join(" " + Chr(183) + " ")
+end function
+
+' x.y to one decimal: 16.44 -> "16.4"
+function fmt1(x as Float) as String
+    t = Int(x * 10 + 0.5)
+    return (t \ 10).ToStr() + "." + (t mod 10).ToStr()
+end function
+
+' the provider's bitrate (kbit/s): 16400 -> "16.4 Mbps", 900 -> "900 kbps"
+function fmtRate(k as Float) as String
+    if k <= 0 then return ""
+    if k >= 1000 then return fmt1(k / 1000) + " Mbps"
+    return Int(k).ToStr() + " kbps"
+end function
+
+' a version's file: its type and size. Your own files' size is known; a provider's is its bitrate x length ("~")
+function fmtFile(v as Object) as String
+    if v = invalid then return ""
+    size = numv(v.size)
+    bytes = size
+    if bytes <= 0 and numv(v.bitrate) > 0 and numv(v.duration) > 0 then bytes = numv(v.bitrate) * 125 * numv(v.duration)
+    s = ""
+    if bytes > 0 then
+        if size <= 0 then s = "~"
+        if bytes >= 1000000000.0 then s = s + fmt1(bytes / 1000000000.0) + " GB" else s = s + Int(bytes / 1000000.0 + 0.5).ToStr() + " MB"
+    end if
+    return spaceJoin([UCase(anyStr(v.ext)), s])
+end function
+
+' a picture's resolution by its width: a widescreen film is 3840x1600 or 1920x800, still 4K and 1080p
+function avRes(av as Dynamic) as String
+    if Type(av) <> "roAssociativeArray" then return ""
+    w = numv(av.w)
+    if w >= 3200 then return "4K"
+    if w >= 1800 then return "1080p"
+    if w >= 1200 then return "720p"
+    if w > 0 then return "SD"
+    return ""
+end function
+
+function avVcodec(c as String) as String
+    names = { hevc: "HEVC", h264: "H.264", av1: "AV1", vp9: "VP9", mpeg2video: "MPEG-2", mpeg4: "MPEG-4" }
+    n = names[c]
+    if n = invalid then return ""
+    return n
+end function
+
+function avAcodec(c as String) as String
+    names = { eac3: "DD+", ac3: "DD", truehd: "TrueHD", dts: "DTS", aac: "AAC", mp3: "MP3", opus: "Opus", flac: "FLAC" }
+    n = names[c]
+    if n = invalid then return ""
+    return n
+end function
+
+' a version's picture and sound as ffmpeg read them (played once, or a library file): "4K HEVC Dolby Vision · 5.1 DD+"
+function fmtAv(av as Dynamic) as String
+    if Type(av) <> "roAssociativeArray" then return ""
+    pic = [avRes(av), avVcodec(anyStr(av.vcodec)), anyStr(av.hdr)]
+    snd = [anyStr(av.layout), avAcodec(anyStr(av.acodec))]
+    return nonEmptyJoin([spaceJoin(pic), spaceJoin(snd)])
+end function
+
+function spaceJoin(parts as Object) as String
+    out = []
+    for each p in parts
+        if p <> "" then out.Push(p)
+    end for
+    return out.Join(" ")
 end function
 
 ' 3725 -> "1:02:05"
