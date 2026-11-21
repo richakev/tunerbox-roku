@@ -9,7 +9,9 @@
     <field id="useCache" type="boolean" value="true" />
     <field id="hideUnmapped" type="boolean" value="true" />
     <field id="refreshCache" type="boolean" value="false" />
-    <field id="guideHours" type="integer" value="12" />
+    <!-- the guide's first pass: this many hours ahead (and 3 back), shown as soon as it's in. Small, so the
+         guide appears quickly; the second pass (guideMore) follows straight after and replaces it -->
+    <field id="guideHours" type="integer" value="3" />
     <!-- the guide's second pass: this many hours, fetched after the first is shown (24: more held the
          listings of a big lineup several times over and ran a Roku low on memory) -->
     <field id="guideMore" type="integer" value="24" />

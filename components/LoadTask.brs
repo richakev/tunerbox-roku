@@ -828,7 +828,7 @@ sub sendBoot(result as Object)
 end sub
 
 ' ============================================================ guide
-' Two passes, so the guide opens quickly but still reaches well ahead: the first asks for guideHours (12)
+' Two passes, so the guide opens quickly but still reaches well ahead: the first asks for guideHours (3)
 ' and hands it over; the second asks for guideMore (24) and hands that over too, replacing the first.
 ' result.full is true on the answer that has everything (the scene only then counts the cache as fresh).
 sub loadGuide()

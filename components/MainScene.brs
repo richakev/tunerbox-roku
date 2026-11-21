@@ -344,7 +344,14 @@ sub bootGuide(g as Dynamic)
         ' the live banner showed "Guide loading..." until now
         if m.mode = "live" then showBanner()
     end if
-    ' the guide refresh is heavy: give the video a head start, and skip it if the cache is fresh
+    ' the guide refresh is heavy: give the video a head start (8 s) when a saved guide is already showing, and
+    ' skip it if that one is fresh. With no saved guide there's nothing to show meanwhile: start almost at once
+    ' (the first pass is only a few hours, so it doesn't hold the stream up for long)
+    if g = invalid then
+        m.guideDelay.duration = 2
+    else
+        m.guideDelay.duration = 8
+    end if
     if not guideFresh then m.guideDelay.control = "start"
     ' and from now on, a check every 30 min (onGuideRefresh)
     m.guideRefresh.control = "start"
