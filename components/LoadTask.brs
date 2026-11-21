@@ -845,11 +845,18 @@ sub loadGuide()
     ' TunerBox 1.9.0 and older have no /guide.json: their web guide's /api/guide (JSON, only the hours asked
     ' for) instead, a few channels per request. epg.xml (three days of every channel, parsed here) is the last
     ' resort: on a big lineup it can take minutes or run the Roku out of memory.
+    ' Both passes' downloads start together: the second (bigger) one comes in while the first is parsed and
+    ' handed over, instead of only starting after it.
     m.top.status = "Downloading guide..."
-    guide = guideJson(base, hours, tFrom, t0)
+    f2 = invalid
+    if more > hours then f2 = startFetch(base + "/guide.json?hours=" + more.ToStr())
+    guide = guideJson(base, hours, tFrom, t0, invalid)
     if guide <> invalid then
         result.source = "guide.json"
     else
+        ' no /guide.json here: the second pass's download is no use either
+        if f2 <> invalid then f2.x.AsyncCancel()
+        f2 = invalid
         guide = guideFromApi(base, tFrom, now + hours * 3600, t0)
         if guide <> invalid then
             result.source = "api/guide"
@@ -872,6 +879,9 @@ sub loadGuide()
     src = result.source
     print "[TunerBox] guide ready (" + result.source + ", " + hours.ToStr() + " h): " + result.count.ToStr() + " channels, " + t0.TotalMilliseconds().ToStr() + " ms"
     full = result.full
+    ' no second pass after all (e.g. no listings): stop its download
+    if full and f2 <> invalid then f2.x.AsyncCancel()
+    if full then f2 = invalid
     m.top.result = result
     ' the first pass is with the scene now: let this thread's copy go before the second download
     guide = invalid
@@ -884,7 +894,9 @@ sub loadGuide()
             g2 = guideFromApi(base, tFrom, nowEpoch() + more * 3600, t1)
             if g2 <> invalid and g2.Count() > 0 then writeCache("guide", FormatJson({ programs: progsToRows(g2) }))
         else
-            g2 = guideJson(base, more, tFrom, t1)
+            ' already downloading since the first pass started (or done by now)
+            g2 = guideJson(base, more, tFrom, t1, f2)
+            f2 = invalid
         end if
         if g2 <> invalid and g2.Count() > 0 then
             n2 = g2.Count()
@@ -914,10 +926,13 @@ sub loadGuide()
     end if
 end sub
 
-' GET /guide.json for the next `hours` (from 3 hours ago), cached for next launch; invalid when it isn't there
-function guideJson(base as String, hours as Integer, tFrom as Integer, t0 as Object) as Dynamic
+' GET /guide.json for the next `hours` (from 3 hours ago), cached for next launch; invalid when it isn't there.
+' `pre`: that download already started with startFetch (invalid: start it now)
+function guideJson(base as String, hours as Integer, tFrom as Integer, t0 as Object, pre as Dynamic) as Dynamic
     guide = invalid
-    txt = fetchText(base + "/guide.json?hours=" + hours.ToStr(), 60000)
+    if pre = invalid then pre = startFetch(base + "/guide.json?hours=" + hours.ToStr())
+    txt = finishFetch(pre, 60000)
+    pre = invalid
     tDl = t0.TotalMilliseconds()
     chars = Len(txt)
     if txt <> "" then
@@ -1199,6 +1214,12 @@ function hostOnly(base as String) as String
 end function
 
 function fetchText(url as String, timeoutMs as Integer) as String
+    return finishFetch(startFetch(url), timeoutMs)
+end function
+
+' start a GET in the background (the download runs while this thread does other work); finishFetch waits
+' for it. Returns { x, port }, or invalid when it couldn't start.
+function startFetch(url as String) as Dynamic
     xfer = CreateObject("roUrlTransfer")
     port = CreateObject("roMessagePort")
     xfer.SetPort(port)
@@ -1207,13 +1228,18 @@ function fetchText(url as String, timeoutMs as Integer) as String
     if LCase(Left(url, 6)) = "https:" then
         xfer.SetCertificatesFile("common:/certs/ca-bundle.crt")
     end if
-    if xfer.AsyncGetToString() then
-        msg = Wait(timeoutMs, port)
-        if Type(msg) = "roUrlEvent" then
-            if msg.GetResponseCode() = 200 then return msg.GetString()
-        else
-            xfer.AsyncCancel()
-        end if
+    if not xfer.AsyncGetToString() then return invalid
+    return { x: xfer, port: port }
+end function
+
+' the body of a startFetch download ("" on failure, or when it isn't done within timeoutMs from now)
+function finishFetch(f as Dynamic, timeoutMs as Integer) as String
+    if f = invalid then return ""
+    msg = Wait(timeoutMs, f.port)
+    if Type(msg) = "roUrlEvent" then
+        if msg.GetResponseCode() = 200 then return msg.GetString()
+    else
+        f.x.AsyncCancel()
     end if
     return ""
 end function
