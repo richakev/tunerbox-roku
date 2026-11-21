@@ -1,6 +1,6 @@
 ' Background loader (runs off the UI thread).
 '   mode "boot":  channel list.  cache -> TunerBox /channels.json (older TunerBox: M3U parse)
-'   mode "guide": programme guide. TunerBox /guide.json (older TunerBox: epg.xml parse)
+'   mode "guide": programme guide. TunerBox /guide.json (1.9.0 and older: /api/guide, then epg.xml parse)
 ' Caches live in cachefs:/ so the second launch is nearly instant.
 
 sub init()
@@ -326,7 +326,7 @@ function fetchMany(urls as Object, timeoutMs as Integer) as Object
                 if msg.GetResponseCode() = 200 then
                     out[e.i] = msg.GetString()
                 else
-                    print "[TunerBox] live sports: HTTP " + msg.GetResponseCode().ToStr() + " " + urls[e.i]
+                    print "[TunerBox] HTTP " + msg.GetResponseCode().ToStr() + " " + urls[e.i]
                 end if
                 xfers.Delete(k)
             end if
@@ -842,13 +842,21 @@ sub loadGuide()
 
     ' TunerBox's guide for the Roku (GET /guide.json, gzipped): only the hours shown and the channels with
     ' listings, read with the built-in JSON parser. An older TunerBox doesn't have it: epg.xml below.
+    ' TunerBox 1.9.0 and older have no /guide.json: their web guide's /api/guide (JSON, only the hours asked
+    ' for) instead, a few channels per request. epg.xml (three days of every channel, parsed here) is the last
+    ' resort: on a big lineup it can take minutes or run the Roku out of memory.
     m.top.status = "Downloading guide..."
     guide = guideJson(base, hours, tFrom, t0)
     if guide <> invalid then
         result.source = "guide.json"
     else
-        guide = guideFromEpgXml(base, tFrom, now + hours * 3600, t0)
-        result.source = "epg.xml"
+        guide = guideFromApi(base, tFrom, now + hours * 3600, t0)
+        if guide <> invalid then
+            result.source = "api/guide"
+        else
+            guide = guideFromEpgXml(base, tFrom, now + hours * 3600, t0)
+            result.source = "epg.xml"
+        end if
         if guide <> invalid and guide.Count() > 0 then
             writeCache("guide", FormatJson({ programs: progsToRows(guide) }))
         end if
@@ -860,7 +868,8 @@ sub loadGuide()
         result.ok = true
     end if
     ' epg.xml (an older TunerBox) is downloaded whole each time: no second pass for that
-    result.full = (not result.ok or result.source <> "guide.json" or more <= hours)
+    result.full = (not result.ok or result.source = "epg.xml" or more <= hours)
+    src = result.source
     print "[TunerBox] guide ready (" + result.source + ", " + hours.ToStr() + " h): " + result.count.ToStr() + " channels, " + t0.TotalMilliseconds().ToStr() + " ms"
     full = result.full
     m.top.result = result
@@ -871,11 +880,16 @@ sub loadGuide()
     ' ---- the second pass: the hours after those, while the guide is already usable
     if not full then
         t1 = CreateObject("roTimespan")
-        g2 = guideJson(base, more, tFrom, t1)
+        if src = "api/guide" then
+            g2 = guideFromApi(base, tFrom, nowEpoch() + more * 3600, t1)
+            if g2 <> invalid and g2.Count() > 0 then writeCache("guide", FormatJson({ programs: progsToRows(g2) }))
+        else
+            g2 = guideJson(base, more, tFrom, t1)
+        end if
         if g2 <> invalid and g2.Count() > 0 then
             n2 = g2.Count()
-            print "[TunerBox] guide extended (" + more.ToStr() + " h): " + n2.ToStr() + " channels, " + t1.TotalMilliseconds().ToStr() + " ms"
-            res2 = { ok: true, guide: g2, count: n2, source: "guide.json", full: true }
+            print "[TunerBox] guide extended (" + src + ", " + more.ToStr() + " h): " + n2.ToStr() + " channels, " + t1.TotalMilliseconds().ToStr() + " ms"
+            res2 = { ok: true, guide: g2, count: n2, source: src, full: true }
             g2 = invalid
             m.top.result = res2
             res2 = invalid
@@ -925,7 +939,77 @@ function guideJson(base as String, hours as Integer, tFrom as Integer, t0 as Obj
     return guide
 end function
 
-' fallback: download + parse epg.xml here.  returns { numStr: [prog] }
+' fallback for TunerBox 1.9.0 and older (no /guide.json): GET /api/guide?start=&stop=&numbers=, the endpoint
+' their web guide uses, for a batch of channels at a time (a few in parallel) so no reply is too big to parse.
+' Its rows are objects ({ start, stop, title, subtitle, descr, category, episode, rating, ... }), keyed by
+' channel number. Returns { numStr: [prog] }; invalid when the server has no /api/guide either.
+function guideFromApi(base as String, tFrom as Integer, tTo as Integer, t0 as Object) as Dynamic
+    nums = []
+    whole = CreateObject("roRegex", "^\d+$", "")
+    for each k in m.top.chanKeys
+        ' /api/guide only takes whole channel numbers
+        if whole.IsMatch(k.n) then nums.Push(k.n)
+    end for
+    if nums.Count() = 0 then return invalid
+    batch = 60
+    parallel = 4
+    urls = []
+    for i = 0 to nums.Count() - 1 step batch
+        last = i + batch - 1
+        if last > nums.Count() - 1 then last = nums.Count() - 1
+        part = []
+        for j = i to last
+            part.Push(nums[j])
+        end for
+        urls.Push(base + "/api/guide?start=" + tFrom.ToStr() + "&stop=" + tTo.ToStr() + "&numbers=" + part.Join(","))
+    end for
+    out = {}
+    answered = 0
+    for i = 0 to urls.Count() - 1 step parallel
+        group = []
+        for j = i to i + parallel - 1
+            if j < urls.Count() then group.Push(urls[j])
+        end for
+        m.top.status = "Downloading guide (" + (i + group.Count()).ToStr() + "/" + urls.Count().ToStr() + ")..."
+        bodies = fetchMany(group, 30000)
+        for each txt in bodies
+            if txt <> "" then
+                data = ParseJson(txt)
+                txt = ""
+                if data <> invalid and Type(data) = "roAssociativeArray" then
+                    answered = answered + 1
+                    for each key in data.Keys()
+                        list = apiProgs(data[key], tFrom, tTo)
+                        if list.Count() > 0 then out[key] = list
+                    end for
+                end if
+                data = invalid
+            end if
+        end for
+        bodies = invalid
+        ' the first batch got nothing usable: this TunerBox has no /api/guide, don't try the rest
+        if answered = 0 then return invalid
+    end for
+    print "[TunerBox] api/guide: " + out.Count().ToStr() + " channels from " + urls.Count().ToStr() + " requests in " + t0.TotalMilliseconds().ToStr() + " ms"
+    return out
+end function
+
+function apiProgs(rows as Dynamic, tFrom as Integer, tTo as Integer) as Object
+    list = []
+    if Type(rows) <> "roArray" then return list
+    for each r in rows
+        if Type(r) = "roAssociativeArray" and r.start <> invalid and r.stop <> invalid then
+            st = Int(r.start)
+            sp = Int(r.stop)
+            if sp > tFrom and st < tTo then
+                list.Push({ start: st, stop: sp, title: anyStr(r.title), subtitle: anyStr(r.subtitle), desc: anyStr(r.descr), cat: anyStr(r.category), ep: anyStr(r.episode), rating: anyStr(r.rating) })
+            end if
+        end if
+    end for
+    return list
+end function
+
+' last resort: download + parse epg.xml here.  returns { numStr: [prog] }
 function guideFromEpgXml(base as String, tFrom as Integer, tTo as Integer, t0 as Object) as Object
     keys = m.top.chanKeys
     m.top.status = "Downloading guide (epg.xml)..."
