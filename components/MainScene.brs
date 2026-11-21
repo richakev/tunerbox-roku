@@ -84,6 +84,8 @@ sub init()
     m.pvHeldIdx = -1        ' live channel paused for On Demand's Pick a version reads
     m.alt = 0           ' which of the playing channel's feeds: 0 the main one, 1.. its backups (Setup's order)
     m.altNum = ""       ' the channel number m.alt is for (a reload can put another channel at the same index)
+    m.pickIdx = -1      ' the channel the "which feed?" list is asking about (and its number, m.pickNum)
+    m.pickNum = ""
     m.feedTask = invalid
     m.mode = "boot"
     m.digits = ""
@@ -770,6 +772,72 @@ sub commitChannel(idx as Integer)
     rememberChannel(idx)
 end sub
 
+' tune a channel picked on purpose (guide, search, Home, Sports, a typed number): one with backup feeds
+' asks which feed first; one with a single feed just plays. Channel up/down and Last stay on the main feed.
+sub tuneTo(idx as Integer)
+    if idx < 0 or idx >= m.channels.Count() then return
+    if m.extern = invalid and m.playIdx = idx then
+        ' already on: keep whichever feed it's playing
+        commitChannel(idx)
+        showBanner()
+        return
+    end if
+    if chAlts(idx) > 0 then
+        askFeed(idx)
+        return
+    end if
+    playFeedOf(idx, 0)
+end sub
+
+sub playFeedOf(idx as Integer, alt as Integer)
+    commitChannel(idx)
+    playChannelFeed(idx, alt)
+    showBanner()
+end sub
+
+' the feeds come from TunerBox (Setup's current order and names); the list shows in onPickFeedApi
+sub askFeed(idx as Integer)
+    if m.mode = "home" then leaveHome()
+    m.returnHome = false
+    t = CreateObject("roSGNode", "LoadTask")
+    t.mode = "api"
+    t.baseUrl = m.base
+    t.apiPath = "/api/channels/" + m.channels[idx].numStr + "/feeds"
+    t.apiTag = "pickfeed"
+    t.apiCtx = { idx: idx, num: m.channels[idx].numStr }
+    t.observeField("result", "onPickFeedApi")
+    m.pickTask = t
+    t.control = "RUN"
+end sub
+
+sub onPickFeedApi(event as Object)
+    r = event.getData()
+    if r = invalid or r.ctx = invalid then return
+    idx = r.ctx.idx
+    if idx < 0 or idx >= m.channels.Count() or m.channels[idx].numStr <> r.ctx.num then return
+    ' something else came up while asking: leave it be
+    if m.mode <> "live" or m.dlg <> invalid or m.menu.visible then return
+    feeds = []
+    if r.ok and Type(r.data) = "roArray" then feeds = r.data
+    if feeds.Count() > 0 then m.channels[idx].alts = feeds.Count() - 1   ' Setup may have changed them
+    if feeds.Count() < 2 then
+        ' only one feed now (or TunerBox didn't answer): play the main one
+        playFeedOf(idx, 0)
+        return
+    end if
+    items = feedItems(feeds, -1)
+    items.Push({ id: "pfcancel", label: "Cancel" })
+    ch = m.channels[idx]
+    m.pickIdx = idx
+    m.pickNum = ch.numStr
+    m.hud.callFunc("hideAll")
+    m.menuPage = "pickfeed"
+    m.menu.heading = "Watch " + ch.numStr + " " + ch.name
+    m.menu.subtitle = "This channel has " + feeds.Count().ToStr() + " feeds. Pick the one to watch."
+    m.menu.items = items
+    m.menu.callFunc("openMenu")
+end sub
+
 sub changeChannel(delta as Integer)
     n = m.channels.Count()
     if n = 0 then return
@@ -791,9 +859,7 @@ sub tuneNumber(numStr as String)
     target = Val(numStr)
     for i = 0 to m.channels.Count() - 1
         if m.channels[i].numVal >= target then
-            commitChannel(i)
-            playChannel(i)
-            showBanner()
+            tuneTo(i)
             return
         end if
     end for
@@ -1213,9 +1279,7 @@ sub onGuideTune()
     m.returnHome = false
     idx = m.guide.tuneRequest
     closeGuide()
-    commitChannel(idx)
-    if m.playIdx <> idx then playChannel(idx)
-    showBanner()
+    tuneTo(idx)
 end sub
 
 sub onGuidePreview()
@@ -1684,9 +1748,7 @@ sub watchChannelNum(num as String, name as String)
     idx = chIndexByNum(num)
     closeSports()
     if idx >= 0 then
-        commitChannel(idx)
-        playChannel(idx)
-        showBanner()
+        tuneTo(idx)
     else
         u = m.base + "/api/stream/" + num
         playExternal({ num: num, name: name, title: name, url: u })
@@ -1898,12 +1960,11 @@ sub searchWatch(num as String, name as String)
     closeSearch()
     idx = chIndexByNum(num)
     if idx >= 0 then
-        commitChannel(idx)
-        if m.playIdx <> idx or m.extern <> invalid then playChannel(idx)
+        tuneTo(idx)
     else
         playExternal({ num: num, name: name, title: name, url: m.base + "/api/stream/" + num })
+        showBanner()
     end if
-    showBanner()
 end sub
 
 ' ============================================================ DVR (hook point)
@@ -2146,9 +2207,7 @@ end sub
 
 sub onGuideTuneIdx(idx as Integer)
     closeGuide()
-    commitChannel(idx)
-    if m.playIdx <> idx then playChannel(idx)
-    showBanner()
+    tuneTo(idx)
 end sub
 
 sub promptHost()
@@ -2363,6 +2422,23 @@ function feedLabel(alt as Integer) as String
     return "Backup " + alt.ToStr()
 end function
 
+' menu rows for a channel's feeds (/api/channels/{n}/feeds), "ON" by the one playing (onAlt; -1 none)
+function feedItems(feeds as Object, onAlt as Integer) as Object
+    items = []
+    for i = 0 to feeds.Count() - 1
+        f = feeds[i]
+        if Type(f) <> "roAssociativeArray" then f = {}
+        a = i
+        if f.alt <> invalid then a = Int(numv(f.alt))
+        lbl = feedLabel(a) + ": " + anyStr(f.name)
+        if anyStr(f.status) = "dead" then lbl = lbl + " (not working)"
+        v = ""
+        if a = onAlt then v = "ON"
+        items.Push({ id: "fd_" + a.ToStr(), label: lbl, value: v })
+    end for
+    return items
+end function
+
 ' the feeds come from TunerBox each time, so they follow Setup's current order (shown in onFeedsApi)
 sub showFeeds()
     idx = m.playIdx
@@ -2392,18 +2468,7 @@ sub onFeedsApi(event as Object)
         showToast("This channel has only one feed now")
         return
     end if
-    items = []
-    for i = 0 to r.data.Count() - 1
-        f = r.data[i]
-        if Type(f) <> "roAssociativeArray" then f = {}
-        a = i
-        if f.alt <> invalid then a = Int(numv(f.alt))
-        lbl = feedLabel(a) + ": " + anyStr(f.name)
-        if anyStr(f.status) = "dead" then lbl = lbl + " (not working)"
-        v = ""
-        if a = m.alt then v = "ON"
-        items.Push({ id: "fd_" + a.ToStr(), label: lbl, value: v })
-    end for
+    items = feedItems(r.data, m.alt)
     items.Push({ id: "fdback", label: "Back to menu" })
     ch = m.channels[m.playIdx]
     m.hud.callFunc("hideAll")
@@ -2630,6 +2695,15 @@ sub onMenuSelected()
             m.menu.items = themeItems()
         else if id = "thback" then
             showSettings()
+        end if
+        return
+    end if
+    if m.menuPage = "pickfeed" then
+        closeMenuView()
+        idx = m.pickIdx
+        m.pickIdx = -1
+        if Left(id, 3) = "fd_" and idx >= 0 and idx < m.channels.Count() then
+            if m.channels[idx].numStr = m.pickNum then playFeedOf(idx, Int(Val(Mid(id, 4))))
         end if
         return
     end if
@@ -3993,9 +4067,7 @@ sub homeTune(num as String)
         showToast("Channel " + num + " is not available")
         return
     end if
-    commitChannel(idx)
-    if m.playIdx <> idx or m.extern <> invalid then playChannel(idx)
-    showBanner()
+    tuneTo(idx)
 end sub
 
 ' a game on now: its channel, or the event feed that carries it
