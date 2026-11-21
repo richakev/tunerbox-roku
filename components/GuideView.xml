@@ -14,6 +14,10 @@
     <field id="cuDays" type="assocarray" onChange="onCuDays" />
     <!-- the guide moved to a time before the listings it has (catch-up): the scene loads from there -->
     <field id="pastRequest" type="integer" alwaysNotify="true" />
+    <!-- the focused show has no description (guide.json?desc=0 leaves them out): { idx, num, start, stop } of
+         that channel's shows to fetch them for; the scene answers on descReply { idx, descs: { "<start>": text } } -->
+    <field id="descRequest" type="assocarray" alwaysNotify="true" />
+    <field id="descReply" type="assocarray" alwaysNotify="true" onChange="onDescReply" />
     <field id="menuRequest" type="string" alwaysNotify="true" />
     <field id="exitRequest" type="boolean" alwaysNotify="true" />
     <!-- a short message for the scene to show as a toast (category filter results) -->
@@ -63,5 +67,7 @@
     <Timer id="jumpTimer" duration="1.6" repeat="false" />
     <!-- Up/Down held: a pause, then a channel a step until it's let go -->
     <Timer id="holdTimer" duration="0.4" repeat="true" />
+    <!-- focus rested on a show without a description this long: fetch it (not one request per show scrolled past) -->
+    <Timer id="descTimer" duration="0.35" repeat="false" />
   </children>
 </component>

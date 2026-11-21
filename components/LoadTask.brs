@@ -847,10 +847,14 @@ sub loadGuide()
     ' resort: on a big lineup it can take minutes or run the Roku out of memory.
     ' Both passes' downloads start together: the second (bigger) one comes in while the first is parsed and
     ' handed over, instead of only starting after it.
+    ' The saved copy for next launch is written once a pass is handed over, so it doesn't hold the guide up;
+    ' with a second pass coming, the first is only kept (m.guideTxt) to be saved if that one doesn't come.
     m.top.status = "Downloading guide..."
+    twoPass = (more > hours)
+    m.guideTxt = ""
     f2 = invalid
-    if more > hours then f2 = startFetch(base + "/guide.json?hours=" + more.ToStr())
-    guide = guideJson(base, hours, tFrom, t0, invalid)
+    if twoPass then f2 = startFetch(guideJsonUrl(base, more))
+    guide = guideJson(base, hours, tFrom, t0, invalid, twoPass)
     if guide <> invalid then
         result.source = "guide.json"
     else
@@ -863,9 +867,6 @@ sub loadGuide()
         else
             guide = guideFromEpgXml(base, tFrom, now + hours * 3600, t0)
             result.source = "epg.xml"
-        end if
-        if guide <> invalid and guide.Count() > 0 then
-            writeCache("guide", FormatJson({ programs: progsToRows(guide) }))
         end if
     end if
 
@@ -883,30 +884,42 @@ sub loadGuide()
     if full and f2 <> invalid then f2.x.AsyncCancel()
     if full then f2 = invalid
     m.top.result = result
+    ' api/guide and epg.xml: the text to save, made from the guide (guide.json keeps the text it downloaded).
+    ' Only when there's no second pass: making it would hold that one up
+    if full and src <> "guide.json" and guide <> invalid and guide.Count() > 0 then m.guideTxt = FormatJson({ programs: progsToRows(guide) })
     ' the first pass is with the scene now: let this thread's copy go before the second download
     guide = invalid
     result = invalid
+    if full then
+        if m.guideTxt <> "" then writeCache("guide", m.guideTxt)
+        m.guideTxt = ""
+    end if
 
     ' ---- the second pass: the hours after those, while the guide is already usable
     if not full then
         t1 = CreateObject("roTimespan")
         if src = "api/guide" then
             g2 = guideFromApi(base, tFrom, nowEpoch() + more * 3600, t1)
-            if g2 <> invalid and g2.Count() > 0 then writeCache("guide", FormatJson({ programs: progsToRows(g2) }))
         else
-            ' already downloading since the first pass started (or done by now)
-            g2 = guideJson(base, more, tFrom, t1, f2)
+            ' already downloading since the first pass started (or done by now); saved as it's read (the
+            ' guide on screen meanwhile is the first pass, so this doesn't hold anything up)
+            g2 = guideJson(base, more, tFrom, t1, f2, false)
             f2 = invalid
         end if
         if g2 <> invalid and g2.Count() > 0 then
             n2 = g2.Count()
             print "[TunerBox] guide extended (" + src + ", " + more.ToStr() + " h): " + n2.ToStr() + " channels, " + t1.TotalMilliseconds().ToStr() + " ms"
             res2 = { ok: true, guide: g2, count: n2, source: src, full: true }
-            g2 = invalid
             m.top.result = res2
             res2 = invalid
+            if src = "api/guide" then writeCache("guide", FormatJson({ programs: progsToRows(g2) }))
+            ' the whole guide is saved: the first pass's copy isn't needed
+            m.guideTxt = ""
         end if
         g2 = invalid
+        ' the second pass didn't come: save the first, so next launch has something to show
+        if m.guideTxt <> "" then writeCache("guide", m.guideTxt)
+        m.guideTxt = ""
     end if
 
     ' ---- afterwards (result already delivered): refresh the channel cache for next launch
@@ -926,11 +939,18 @@ sub loadGuide()
     end if
 end sub
 
-' GET /guide.json for the next `hours` (from 3 hours ago), cached for next launch; invalid when it isn't there.
+' /guide.json without descriptions (desc=0: the guide fetches the one it shows); an older TunerBox ignores
+' desc=0 and sends them all, which still works
+function guideJsonUrl(base as String, hours as Integer) as String
+    return base + "/guide.json?hours=" + hours.ToStr() + "&desc=0"
+end function
+
+' GET /guide.json for the next `hours` (from 3 hours ago); invalid when it isn't there. Saved for next launch:
+' now, or with `keep` held in m.guideTxt for the caller to save once it's handed over.
 ' `pre`: that download already started with startFetch (invalid: start it now)
-function guideJson(base as String, hours as Integer, tFrom as Integer, t0 as Object, pre as Dynamic) as Dynamic
+function guideJson(base as String, hours as Integer, tFrom as Integer, t0 as Object, pre as Dynamic, keep as Boolean) as Dynamic
     guide = invalid
-    if pre = invalid then pre = startFetch(base + "/guide.json?hours=" + hours.ToStr())
+    if pre = invalid then pre = startFetch(guideJsonUrl(base, hours))
     txt = finishFetch(pre, 60000)
     pre = invalid
     tDl = t0.TotalMilliseconds()
@@ -940,7 +960,7 @@ function guideJson(base as String, hours as Integer, tFrom as Integer, t0 as Obj
         ' (the text once parsed, the parsed reply once turned into the guide)
         data = ParseJson(txt)
         if data <> invalid and Type(data.programs) = "roAssociativeArray" then
-            writeCache("guide", txt)
+            if keep then m.guideTxt = txt else writeCache("guide", txt)
             txt = ""
             progs = data.programs
             data = invalid

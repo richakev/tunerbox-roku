@@ -113,6 +113,7 @@ sub init()
     m.guide.observeField("previewRequest", "onGuidePreview")
     m.guide.observeField("optionsRequest", "onGuideOptions")
     m.guide.observeField("pastRequest", "onGuidePast")
+    m.guide.observeField("descRequest", "onGuideDesc")
     m.guide.observeField("menuRequest", "onGuideMenu")
     m.guide.observeField("exitRequest", "onGuideExit")
     m.guide.observeField("notice", "onGuideNotice")
@@ -440,6 +441,9 @@ sub startGuideTask()
     m.guideTask.baseUrl = m.base
     m.guideTask.refreshCache = m.fromCache
     m.guideTask.chanKeys = keys
+    ' a guide is already showing (the saved one, or the last fetch): no quick first pass, it'd only replace
+    ' that with fewer hours; just the whole guide, in one go
+    if m.epgCount > 0 then m.guideTask.guideHours = m.guideTask.guideMore
     m.guideTask.observeField("result", "onGuideResult")
     m.guideTask.control = "RUN"
 end sub
@@ -3250,6 +3254,27 @@ sub onGuidePast()
     homeApi("cuguide", "/api/guide?start=" + fromAt.ToStr() + "&stop=" + stopAt.ToStr() + "&numbers=" + nums.Join(","), "", invalid, { fromAt: fromAt, stopAt: stopAt })
 end sub
 
+' the guide's focused show has no description (guide.json?desc=0): that channel's from /api/guide
+sub onGuideDesc()
+    q = m.guide.descRequest
+    if q = invalid or q.num = invalid then return
+    homeApi("gdesc", "/api/guide?start=" + epochOf(q.start).ToStr() + "&stop=" + epochOf(q.stop).ToStr() + "&numbers=" + q.num, "", invalid, { idx: q.idx, num: q.num })
+end sub
+
+sub gotGuideDesc(r as Object)
+    if not r.ok or Type(r.data) <> "roAssociativeArray" then return
+    list = r.data[r.ctx.num]
+    if Type(list) <> "roArray" then return
+    descs = {}
+    for each p in list
+        if Type(p) = "roAssociativeArray" and p.start <> invalid then
+            d = anyStr(p.descr)
+            if d <> "" then descs[epochOf(p.start).ToStr()] = d
+        end if
+    end for
+    if descs.Count() > 0 then m.guide.descReply = { idx: r.ctx.idx, descs: descs }
+end sub
+
 ' GET /api/guide: { "<number>": [{ start, stop, title, subtitle, descr, category, episode, rating }] }
 sub gotPastGuide(r as Object)
     if not r.ok or Type(r.data) <> "roAssociativeArray" or r.data.detail <> invalid then
@@ -3732,6 +3757,8 @@ sub onHomeApi(event as Object)
         end if
     else if r.tag = "cuguide" then
         gotPastGuide(r)
+    else if r.tag = "gdesc" then
+        gotGuideDesc(r)
     end if
 end sub
 

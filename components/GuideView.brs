@@ -46,6 +46,10 @@ sub init()
     m.jumpTimer.observeField("fire", "onJumpTimer")
     m.holdTimer = m.top.findNode("holdTimer")
     m.holdTimer.observeField("fire", "onHoldTimer")
+    m.descTimer = m.top.findNode("descTimer")
+    m.descTimer.observeField("fire", "onDescTimer")
+    m.descWant = invalid
+    m.wholeNum = CreateObject("roRegex", "^\d+$", "")
     m.holdKey = ""
 
     m.favSet = {}
@@ -474,6 +478,50 @@ sub styleChannel(r as Integer, focused as Boolean)
     end if
 end sub
 
+' ------------------------------------------------------------ descriptions, fetched when shown
+' TunerBox's guide.json?desc=0 leaves descriptions out of the bulk download (most of its bytes); the one for
+' the focused show comes from /api/guide (every TunerBox has it), with the next hours of that channel's, once
+' focus rests on it. An older TunerBox sends them all anyway: then this only runs for shows that have none.
+sub wantDesc(idx as Integer, ch as Object, p as Object)
+    if truthy(p.descTried) then return
+    ' /api/guide takes whole channel numbers only (anything else would answer with every channel)
+    if not m.wholeNum.IsMatch(ch.numStr) then return
+    m.descWant = { idx: idx, num: ch.numStr, start: p.start }
+    m.descTimer.control = "stop"
+    m.descTimer.control = "start"
+end sub
+
+sub onDescTimer()
+    w = m.descWant
+    m.descWant = invalid
+    if w = invalid or w.idx < 0 or w.idx >= m.chs.Count() then return
+    ' this show and the 6 hours after it on that channel: one request, and asked for once each
+    stopAt = w.start + 6 * 3600
+    ch = m.chs[w.idx]
+    if ch.programs <> invalid then
+        for each p in ch.programs
+            if p.stop > w.start and p.start < stopAt then p.descTried = true
+        end for
+    end if
+    m.top.descRequest = { idx: w.idx, num: w.num, start: w.start, stop: stopAt }
+end sub
+
+sub onDescReply()
+    r = m.top.descReply
+    if r = invalid or r.descs = invalid or r.idx = invalid then return
+    if r.idx < 0 or r.idx >= m.chs.Count() then return
+    ch = m.chs[r.idx]
+    if ch.programs = invalid then return
+    for each p in ch.programs
+        d = r.descs[p.start.ToStr()]
+        if d <> invalid then p.desc = d
+    end for
+    ' the focused show is one of them: show its description now
+    if m.top.visible and not m.pick and m.fCell <> invalid and m.row >= 0 and m.row < m.view.Count() then
+        if m.view[m.row] = r.idx then updateInfo(m.fCell)
+    end if
+end sub
+
 sub updateInfo(c as Object)
     ch = m.chs[m.view[m.row]]
     chText = ch.numStr + " " + ch.name
@@ -485,6 +533,7 @@ sub updateInfo(c as Object)
         if p.cat <> "" then meta = meta + dotSep() + p.cat
         m.metaLbl.text = plainText(meta)
         m.descLbl.text = plainText(p.desc)
+        if anyStr(p.desc) = "" then wantDesc(m.view[m.row], ch, p)
         if p.rating <> "" then
             showBadge(p.rating)
         else
