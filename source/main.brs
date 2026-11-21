@@ -29,9 +29,14 @@ sub Main(args as Dynamic)
     devInfo.EnableLowGeneralMemoryEvent(true)
 
     ' HDMI-CEC: the power button on a stick/box remote turns the TV off but not the Roku,
-    ' and switching TV inputs looks the same; either way stop streaming (frees the server tuner)
-    cec = CreateObject("roCECStatus")
+    ' and switching TV inputs looks the same; either way stop streaming (frees the server tuner).
+    ' Not on a Roku TV: there the Roku is the TV, so "active source" flips whenever a soundbar / ARC or
+    ' another HDMI device talks CEC, and each flip stopped and restarted the stream (a black blink). A Roku
+    ' TV suspends the app itself when it's turned off or switched to another input.
+    cec = invalid
+    if devInfo.GetModelType() <> "TV" then cec = CreateObject("roCECStatus")
     if cec <> invalid then cec.SetMessagePort(port)
+    print "[cec] model type: "; devInfo.GetModelType(); ", CEC standby "; (cec <> invalid)
 
     handleArgs(scene, args)
 

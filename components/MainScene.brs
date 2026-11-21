@@ -1026,7 +1026,8 @@ function onKeyEvent(key as String, press as Boolean) as Boolean
     else if key = "play" then
         toggleMute()
     else if key = "back" then
-        confirmExit()
+        ' back flips to the last channel watched; only asks to exit when there isn't one yet
+        if m.lastIdx >= 0 and m.lastIdx <> m.curIdx then goLast() else confirmExit()
     else if Left(key, 4) = "Lit_" then
         return liveLit(Mid(key, 5))
     else
