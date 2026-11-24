@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<!-- Multiview's labels over the tiled picture TunerBox sends (MainMultiview.brs): each picture's channel and
+     show, the highlight, which one has the sound, a message on one that has no signal, and "+ Add a channel"
+     in a layout's spare places. Laid out in screen pixels over the full-screen video. -->
+<component name="MultiView" extends="Group">
+  <script type="text/brightscript" uri="pkg:/components/MultiView.brs" />
+  <script type="text/brightscript" uri="pkg:/source/utils.brs" />
+  <interface>
+    <!-- [{ x, y, w, h, kind: "pic" | "add", label, now, msg, focus, sound, room }] in place order -->
+    <field id="cells" type="array" onChange="render" />
+    <!-- a line of help along the top ("" hides it) -->
+    <field id="hint" type="string" onChange="render" />
+    <!-- the screen's safe area inset [left, top, right, bottom]: text near an edge stays inside it -->
+    <field id="safe" type="array" onChange="render" />
+  </interface>
+  <children>
+    <Group id="layer" />
+  </children>
+</component>

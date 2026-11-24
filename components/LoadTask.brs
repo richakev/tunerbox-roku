@@ -651,7 +651,13 @@ sub callApi()
     if m.top.apiMethod = "DELETE" then
         txt = deleteText(url, 15000)
     else if m.top.apiBody <> "" then
-        txt = postText(url, m.top.apiBody, 15000)
+        res = postFull(url, m.top.apiBody, 15000)
+        txt = res.text
+        ' refused (4xx): FastAPI's {"detail": "why"}, for the screen to say
+        if res.code >= 400 then
+            e = ParseJson(res.body)
+            if Type(e) = "roAssociativeArray" and e.detail <> invalid and GetInterface(e.detail, "ifString") <> invalid then result.detail = e.detail
+        end if
     else
         ms = m.top.apiTimeout
         if ms <= 0 then ms = 30000
@@ -739,6 +745,28 @@ function postText(url as String, body as String, timeoutMs as Integer) as String
         end if
     end if
     return ""
+end function
+
+' POST a JSON body: { code, text (the reply when it's 2xx, else ""), body (the reply whatever the code) }
+function postFull(url as String, body as String, timeoutMs as Integer) as Object
+    out = { code: 0, text: "", body: "" }
+    xfer = CreateObject("roUrlTransfer")
+    port = CreateObject("roMessagePort")
+    xfer.SetPort(port)
+    xfer.SetUrl(url)
+    xfer.RetainBodyOnError(true)
+    xfer.AddHeader("Content-Type", "application/json")
+    if xfer.AsyncPostFromString(body) then
+        msg = Wait(timeoutMs, port)
+        if Type(msg) = "roUrlEvent" then
+            out.code = msg.GetResponseCode()
+            out.body = msg.GetString()
+            if out.code >= 200 and out.code < 300 then out.text = out.body
+        else
+            xfer.AsyncCancel()
+        end if
+    end if
+    return out
 end function
 
 function deleteText(url as String, timeoutMs as Integer) as String

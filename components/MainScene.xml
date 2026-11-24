@@ -2,6 +2,7 @@
 <component name="MainScene" extends="Scene">
   <script type="text/brightscript" uri="pkg:/components/MainScene.brs" />
   <script type="text/brightscript" uri="pkg:/source/utils.brs" />
+  <script type="text/brightscript" uri="pkg:/components/MainMultiview.brs" />
   <interface>
     <field id="launchHost" type="string" alwaysNotify="true" onChange="onLaunchHost" />
     <field id="exitApp" type="boolean" alwaysNotify="true" />
@@ -13,6 +14,8 @@
   <children>
     <Rectangle id="bg" width="1920" height="1080" color="0x000000FF" />
     <Video id="video" translation="[0,0]" width="1920" height="1080" enableUI="false" enableTrickPlay="false" />
+    <!-- multiview's labels, highlight and "+ Add a channel" over the tiled picture (MainMultiview.brs) -->
+    <MultiView id="mvView" visible="false" />
     <GuideView id="guide" visible="false" />
     <!-- On Demand subtitles (library titles): timed lines from TunerBox, drawn over the picture -->
     <Group id="subs" visible="false">

@@ -84,8 +84,6 @@ sub init()
     m.pvHeldIdx = -1        ' live channel paused for On Demand's Pick a version reads
     m.alt = 0           ' which of the playing channel's feeds: 0 the main one, 1.. its backups (Setup's order)
     m.altNum = ""       ' the channel number m.alt is for (a reload can put another channel at the same index)
-    m.pickIdx = -1      ' the channel the "which feed?" list is asking about (and its number, m.pickNum)
-    m.pickNum = ""
     m.feedTask = invalid
     m.mode = "boot"
     m.digits = ""
@@ -104,6 +102,19 @@ sub init()
     m.favRetryTimer = CreateObject("roSGNode", "Timer")
     m.favRetryTimer.repeat = false
     m.favRetryTimer.observeField("fire", "onFavRetry")
+    ' the other channels and event feeds showing the game that's on (TunerBox /api/sports/places), asked a
+    ' moment after tuning so channel surfing doesn't ask; m.places = { key: placesKey(), game } (game may be invalid)
+    m.places = invalid
+    m.placesTask = invalid
+    m.placesMenuTask = invalid
+    m.placeOpts = []        ' what the Switch feed list's pl_<i> rows play: { ch } or { f }
+    m.swf = invalid         ' Switch feed waiting on its answers: { key, idx, wait, feeds, seq }
+    m.swfSeq = 0            ' which Switch feed opening an answer is for (an older one is ignored)
+    m.placesTimer = CreateObject("roSGNode", "Timer")
+    m.placesTimer.repeat = false
+    m.placesTimer.duration = 2.5
+    m.placesTimer.observeField("fire", "onPlacesTimer")
+    mvInit()                ' multiview (MainMultiview.brs)
     m.guideTitle = ""
     m.useCache = true
     m.fromCache = false
@@ -693,6 +704,7 @@ end sub
 ' a channel on one of its feeds: alt 0 = main, 1.. = backups, as /api/stream/{n}?alt= numbers them
 sub playChannelFeed(idx as Integer, alt as Integer)
     if idx < 0 or idx >= m.channels.Count() then return
+    mvForget()
     ch = m.channels[idx]
     m.alt = alt
     m.altNum = ch.numStr
@@ -709,6 +721,7 @@ sub playChannelFeed(idx as Integer, alt as Integer)
     m.playIdx = idx
     m.retries = 0
     m.underruns = 0
+    placesSoon()
 end sub
 
 ' 720p compatibility mode: applies to ALL channels (default ON, toggle in MENU)
@@ -747,7 +760,9 @@ sub toggleCompat()
         regWrite("compat720", "1")
         showToast("720p mode ON")
     end if
-    if m.extern <> invalid then
+    if m.mv <> invalid then
+        mvStartStream()
+    else if m.extern <> invalid then
         playExternal(m.extern)
     else if m.playIdx >= 0 then
         playChannel(m.playIdx)
@@ -772,70 +787,21 @@ sub commitChannel(idx as Integer)
     rememberChannel(idx)
 end sub
 
-' tune a channel picked on purpose (guide, search, Home, Sports, a typed number): one with backup feeds
-' asks which feed first; one with a single feed just plays. Channel up/down and Last stay on the main feed.
+' tune a channel picked on purpose (guide, search, Home, Sports, a typed number): it plays on its main
+' feed, as channel up/down and Last do. Menu > Switch feed offers its backup feeds (and other places
+' showing the game that's on).
 sub tuneTo(idx as Integer)
     if idx < 0 or idx >= m.channels.Count() then return
+    if mvRoute({ idx: idx }) then return        ' multiview: into the highlighted (or a new) picture
     if m.extern = invalid and m.playIdx = idx then
         ' already on: keep whichever feed it's playing
         commitChannel(idx)
         showBanner()
         return
     end if
-    if chAlts(idx) > 0 then
-        askFeed(idx)
-        return
-    end if
-    playFeedOf(idx, 0)
-end sub
-
-sub playFeedOf(idx as Integer, alt as Integer)
     commitChannel(idx)
-    playChannelFeed(idx, alt)
+    playChannelFeed(idx, 0)
     showBanner()
-end sub
-
-' the feeds come from TunerBox (Setup's current order and names); the list shows in onPickFeedApi
-sub askFeed(idx as Integer)
-    if m.mode = "home" then leaveHome()
-    m.returnHome = false
-    t = CreateObject("roSGNode", "LoadTask")
-    t.mode = "api"
-    t.baseUrl = m.base
-    t.apiPath = "/api/channels/" + m.channels[idx].numStr + "/feeds"
-    t.apiTag = "pickfeed"
-    t.apiCtx = { idx: idx, num: m.channels[idx].numStr }
-    t.observeField("result", "onPickFeedApi")
-    m.pickTask = t
-    t.control = "RUN"
-end sub
-
-sub onPickFeedApi(event as Object)
-    r = event.getData()
-    if r = invalid or r.ctx = invalid then return
-    idx = r.ctx.idx
-    if idx < 0 or idx >= m.channels.Count() or m.channels[idx].numStr <> r.ctx.num then return
-    ' something else came up while asking: leave it be
-    if m.mode <> "live" or m.dlg <> invalid or m.menu.visible then return
-    feeds = []
-    if r.ok and Type(r.data) = "roArray" then feeds = r.data
-    if feeds.Count() > 0 then m.channels[idx].alts = feeds.Count() - 1   ' Setup may have changed them
-    if feeds.Count() < 2 then
-        ' only one feed now (or TunerBox didn't answer): play the main one
-        playFeedOf(idx, 0)
-        return
-    end if
-    items = feedItems(feeds, -1)
-    items.Push({ id: "pfcancel", label: "Cancel" })
-    ch = m.channels[idx]
-    m.pickIdx = idx
-    m.pickNum = ch.numStr
-    m.hud.callFunc("hideAll")
-    m.menuPage = "pickfeed"
-    m.menu.heading = "Watch " + ch.numStr + " " + ch.name
-    m.menu.subtitle = "This channel has " + feeds.Count().ToStr() + " feeds. Pick the one to watch."
-    m.menu.items = items
-    m.menu.callFunc("openMenu")
 end sub
 
 sub changeChannel(delta as Integer)
@@ -911,6 +877,10 @@ sub onVideoState()
         vodState(st)
         return
     end if
+    if m.mv <> invalid then
+        mvVideoState(st)
+        return
+    end if
     if st = "playing" then
         m.retries = 0
         if m.savedGuideWait then startSavedGuide()
@@ -969,6 +939,10 @@ end sub
 sub onRetryTimer()
     if m.vod <> invalid then
         if m.mode = "vod" then vodStart(vodPos())
+        return
+    end if
+    if m.mv <> invalid then
+        mvStartStream()
         return
     end if
     if m.extern <> invalid then
@@ -1033,6 +1007,7 @@ function bannerInfo(ch as Object) as Object
 end function
 
 sub showBanner()
+    if m.mv <> invalid then return          ' multiview labels its own pictures
     if m.extern <> invalid then
         m.hud.callFunc("showBanner", externInfo())
         return
@@ -1085,6 +1060,7 @@ function onKeyEvent(key as String, press as Boolean) as Boolean
     if m.mode = "rec" then return recKey(key)
 
     if m.mode <> "live" then return false
+    if m.mv <> invalid then return mvKey(key)
 
     if key = "up" then
         changeChannel(1)
@@ -1143,6 +1119,8 @@ function liveLit(ch as String) as Boolean
         openFavorites()
     else if lc = "h" and m.homeOn then
         openHome()
+    else if lc = "w" then
+        mvOpen()
     else
         return false
     end if
@@ -1439,6 +1417,11 @@ end sub
 
 ' what's on: an event feed by key, else the channel number
 function statsQuery() as String
+    if m.mv <> invalid then
+        t = mvTile(m.mv.focus)
+        if t <> invalid and t.key <> "" then return "feed=" + urlEncode(t.key)
+        if t <> invalid then return "ch=" + urlEncode(t.num)
+    end if
     if m.extern <> invalid then
         if m.extern.key <> invalid then return "feed=" + urlEncode(m.extern.key)
         return "ch=" + urlEncode(m.extern.num)
@@ -1518,30 +1501,7 @@ end sub
 ' another game from Live scores: one place to watch goes straight there; more asks which, as the
 ' Sports screen does (feeds checked live first, then the channels, then the unchecked feeds)
 sub statsWatch(o as Object)
-    live = []
-    rest = []
-    chans = []
-    if Type(o.ch) = "roAssociativeArray" then chans.Push(o.ch)
-    if Type(o.also) = "roArray" then
-        for each c in o.also
-            chans.Push(c)
-        end for
-    end if
-    if Type(o.feeds) = "roArray" then
-        for each f in o.feeds
-            if anyStr(f.status) = "ok" then live.Push({ f: f }) else rest.Push({ f: f })
-        end for
-    end if
-    opts = []
-    for each x in live
-        opts.Push(x)
-    end for
-    for each c in chans
-        if chIndexByNum(numToStr(c.number)) >= 0 then opts.Push({ ch: c })
-    end for
-    for each x in rest
-        opts.Push(x)
-    end for
+    opts = gameOpts(o, "", "")
     if opts.Count() = 0 then
         showToast("None of your channels or event feeds has this game")
         return
@@ -1571,6 +1531,44 @@ sub statsWatch(o as Object)
     m.gswOpts = opts
     showDialog("gsw", anyStr(o.name), [opts.Count().ToStr() + " places have this game. If one doesn't work, try the next."], buttons, actions)
 end sub
+
+' every place a game is on ({ ch } or { f }), best first as the Sports screen orders them: event feeds
+' checked live, then the channels in this Roku's lineup, then the feeds nobody has checked. ch, also and
+' feeds (or a single feed) as TunerBox's sports games carry them; skipNum / skipFeed: what's on now
+function gameOpts(o as Object, skipNum as String, skipFeed as String) as Object
+    live = []
+    rest = []
+    chans = []
+    if Type(o.ch) = "roAssociativeArray" then chans.Push(o.ch)
+    if Type(o.also) = "roArray" then
+        for each c in o.also
+            if Type(c) = "roAssociativeArray" then chans.Push(c)
+        end for
+    end if
+    feeds = []
+    if Type(o.feeds) = "roArray" then
+        feeds = o.feeds
+    else if Type(o.feed) = "roAssociativeArray" then
+        feeds = [o.feed]
+    end if
+    for each f in feeds
+        if Type(f) = "roAssociativeArray" and anyStr(f.key) <> "" and anyStr(f.key) <> skipFeed then
+            if anyStr(f.status) = "ok" then live.Push({ f: f }) else rest.Push({ f: f })
+        end if
+    end for
+    opts = []
+    for each x in live
+        opts.Push(x)
+    end for
+    for each c in chans
+        num = numToStr(c.number)
+        if num <> skipNum and chIndexByNum(num) >= 0 then opts.Push({ ch: c })
+    end for
+    for each x in rest
+        opts.Push(x)
+    end for
+    return opts
+end function
 
 ' watch it, then put the panel back over the new game
 sub statsGo(op as Object)
@@ -1750,6 +1748,7 @@ sub watchChannelNum(num as String, name as String)
     if idx >= 0 then
         tuneTo(idx)
     else
+        if mvRoute({ num: num, name: name }) then return
         u = m.base + "/api/stream/" + num
         playExternal({ num: num, name: name, title: name, url: u })
         showBanner()
@@ -1765,11 +1764,13 @@ sub watchFeed(f as Object)
     esc = urlEncode(f.key)
     u = m.base + "/api/feed/stream?key=" + esc
     closeSports()
+    if mvRoute({ f: f }) then return
     playExternal({ num: "EVENT", name: f.group, title: f.name, url: u, key: f.key })
     showBanner()
 end sub
 
 sub playExternal(ex as Object)
+    mvForget()
     m.extern = ex
     u = withDevice(withBuffer(ex.url))
     if isCompat() then
@@ -1789,6 +1790,7 @@ sub playExternal(ex as Object)
     m.playIdx = -1
     m.retries = 0
     m.underruns = 0
+    placesSoon()
 end sub
 
 function externInfo() as Object
@@ -1935,7 +1937,8 @@ sub onSearchRequest()
         end if
         closeSearch()
         m.returnHome = false
-        playExternal({ num: "EVENT", name: f.group, title: f.name, url: m.base + "/api/feed/stream?key=" + urlEncode(f.key) })
+        if mvRoute({ f: f }) then return
+        playExternal({ num: "EVENT", name: f.group, title: f.name, url: m.base + "/api/feed/stream?key=" + urlEncode(f.key), key: f.key })
         showBanner()
     else if ty = "program" then
         p = req.prog
@@ -1962,6 +1965,7 @@ sub searchWatch(num as String, name as String)
     if idx >= 0 then
         tuneTo(idx)
     else
+        if mvRoute({ num: num, name: name }) then return
         playExternal({ num: num, name: name, title: name, url: m.base + "/api/stream/" + num })
         showBanner()
     end if
@@ -2202,6 +2206,8 @@ sub onDlgButton()
         runGuideMenuAction(action)
     else if kind = "gcat" then
         if Left(action, 2) = "g:" and m.mode = "guide" then m.guide.callFunc("setGenre", Mid(action, 3))
+    else if kind = "mvswap" then
+        mvSwapAction(action)
     end if
 end sub
 
@@ -2372,7 +2378,17 @@ end function
 function menuItems() as Object
     items = []
     if m.homeOn then items.Push({ id: "home", label: "Home" })
-    if canSwitchFeed() then items.Push({ id: "feeds", label: "Switch feed", value: (m.alt + 1).ToStr() + " of " + (chAlts(m.playIdx) + 1).ToStr() })
+    if m.mv <> invalid then
+        items.Push({ id: "mv", label: "Multiview", value: "ON" })
+    else if mvMaxPics() >= 2 and mvMainTile() <> invalid then
+        items.Push({ id: "mv", label: "Multiview", value: "up to " + mvMaxPics().ToStr() })
+    end if
+    if canSwitchFeed() then
+        ' which of the channel's own feeds is on, when it has backups ("1 of 3")
+        v = ""
+        if m.extern = invalid and chAlts(m.playIdx) > 0 then v = (m.alt + 1).ToStr() + " of " + (chAlts(m.playIdx) + 1).ToStr()
+        items.Push({ id: "feeds", label: "Switch feed", value: v })
+    end if
     items.Append([
         { id: "favorites", label: "Favorites" },
         { id: "gamestats", label: "Game stats & live scores" },
@@ -2411,15 +2427,92 @@ sub showSettings()
     m.menu.callFunc("openMenu")
 end sub
 
-' ------------------------------------------------------------ switch feed (a channel with backup feeds)
+' ------------------------------------------------------------ switch feed
+' A channel's own feeds (main and backups), and the other channels and event feeds showing the game that's
+' on (TunerBox /api/sports/places, only in newer servers: without it, just the channel's own feeds)
 function canSwitchFeed() as Boolean
-    if m.vod <> invalid or m.rec <> invalid or m.extern <> invalid then return false
-    return m.playIdx >= 0 and chAlts(m.playIdx) > 0
+    if m.vod <> invalid or m.rec <> invalid then return false
+    if m.extern = invalid and m.playIdx >= 0 and chAlts(m.playIdx) > 0 then return true
+    return placeOpts().Count() > 0
+end function
+
+' what's playing, as /api/sports/places is asked about it: "f:<feed key>", "c:<channel number>", "" nothing
+function placesKey() as String
+    if m.vod <> invalid or m.rec <> invalid then return ""
+    if m.extern <> invalid then
+        if m.extern.key <> invalid and anyStr(m.extern.key) <> "" then return "f:" + anyStr(m.extern.key)
+        if anyStr(m.extern.num) <> "" and m.extern.num <> "EVENT" then return "c:" + anyStr(m.extern.num)
+        return ""
+    end if
+    if m.playIdx >= 0 and m.playIdx < m.channels.Count() then return "c:" + m.channels[m.playIdx].numStr
+    return ""
+end function
+
+' from playChannelFeed / playExternal: look the places up in a moment (not again for a retry or another
+' feed of the same channel, which keep the key)
+sub placesSoon()
+    k = placesKey()
+    if m.places <> invalid and m.places.key = k then return
+    m.places = invalid
+    m.placesTimer.control = "stop"
+    if k <> "" then m.placesTimer.control = "start"
+end sub
+
+sub onPlacesTimer()
+    loadPlaces(false)
+end sub
+
+' forMenu: Switch feed is waiting for the answer (swfDone)
+sub loadPlaces(forMenu as Boolean)
+    k = placesKey()
+    if k = "" then return
+    q = "ch="
+    if Left(k, 2) = "f:" then q = "feed="
+    t = CreateObject("roSGNode", "LoadTask")
+    t.mode = "api"
+    t.baseUrl = m.base
+    t.apiPath = "/api/sports/places?" + q + urlEncode(Mid(k, 3))
+    t.apiTimeout = 8000
+    t.apiTag = "places"
+    t.apiCtx = { key: k, menu: forMenu, seq: m.swfSeq }
+    t.observeField("result", "onPlacesApi")
+    if forMenu then m.placesMenuTask = t else m.placesTask = t
+    t.control = "RUN"
+end sub
+
+' an older TunerBox has no /api/sports/places (404) or isn't following a game there: no places
+sub onPlacesApi(event as Object)
+    r = event.getData()
+    if r = invalid or r.ctx = invalid then return
+    if r.ctx.key = placesKey() then
+        game = invalid
+        if r.ok = true and Type(r.data) = "roAssociativeArray" and Type(r.data.game) = "roAssociativeArray" then game = r.data.game
+        m.places = { key: r.ctx.key, game: game }
+    end if
+    if r.ctx.menu = true and m.swf <> invalid and r.ctx.seq = m.swf.seq then swfDone()
+end sub
+
+' the places other than what's on now, best first ({ ch } or { f }), for what's playing
+function placeOpts() as Object
+    k = placesKey()
+    if k = "" or m.places = invalid or m.places.key <> k or m.places.game = invalid then return []
+    skipNum = ""
+    skipFeed = ""
+    if Left(k, 2) = "f:" then skipFeed = Mid(k, 3) else skipNum = Mid(k, 3)
+    return gameOpts(m.places.game, skipNum, skipFeed)
 end function
 
 function feedLabel(alt as Integer) as String
     if alt = 0 then return "Main"
     return "Backup " + alt.ToStr()
+end function
+
+' playlist names often carry decorations ("##### NEWS #####"): leave those out
+function tidyFeedName(s as String) as String
+    t = CreateObject("roRegex", "#{2,}", "").ReplaceAll(s, " ")
+    t = CreateObject("roRegex", "\s{2,}", "").ReplaceAll(t, " ").Trim()
+    if t = "" then return s
+    return t
 end function
 
 ' menu rows for a channel's feeds (/api/channels/{n}/feeds), "ON" by the one playing (onAlt; -1 none)
@@ -2430,8 +2523,9 @@ function feedItems(feeds as Object, onAlt as Integer) as Object
         if Type(f) <> "roAssociativeArray" then f = {}
         a = i
         if f.alt <> invalid then a = Int(numv(f.alt))
-        lbl = feedLabel(a) + ": " + anyStr(f.name)
-        if anyStr(f.status) = "dead" then lbl = lbl + " (not working)"
+        lbl = feedLabel(a) + ": " + tidyFeedName(anyStr(f.name))
+        if anyStr(f.source) <> "" then lbl = lbl + dotSep() + anyStr(f.source)
+        if anyStr(f.status) = "dead" then lbl = lbl + " (failed last scan)"
         v = ""
         if a = onAlt then v = "ON"
         items.Push({ id: "fd_" + a.ToStr(), label: lbl, value: v })
@@ -2439,42 +2533,106 @@ function feedItems(feeds as Object, onAlt as Integer) as Object
     return items
 end function
 
-' the feeds come from TunerBox each time, so they follow Setup's current order (shown in onFeedsApi)
+' menu rows for the other places showing the game (pl_<i> plays m.placeOpts[i])
+function placeItems(opts as Object) as Object
+    items = []
+    for i = 0 to opts.Count() - 1
+        op = opts[i]
+        if op.ch <> invalid then
+            nm = anyStr(op.ch.label)
+            if nm = "" then nm = anyStr(op.ch.name)
+            items.Push({ id: "pl_" + i.ToStr(), label: numToStr(op.ch.number) + " " + nm, value: "CH" })
+        else
+            lbl = plainText(anyStr(op.f.name))
+            if anyStr(op.f.group) <> "" then lbl = lbl + dotSep() + anyStr(op.f.group)
+            v = "FEED"
+            if anyStr(op.f.status) = "ok" then v = "LIVE"
+            items.Push({ id: "pl_" + i.ToStr(), label: lbl, value: v })
+        end if
+    end for
+    return items
+end function
+
+' the channel's feeds come from TunerBox each time, so they follow Setup's current order; the places are
+' asked again too. Both answers in, the list shows (swfDone)
 sub showFeeds()
-    idx = m.playIdx
-    if idx < 0 then return
-    t = CreateObject("roSGNode", "LoadTask")
-    t.mode = "api"
-    t.baseUrl = m.base
-    t.apiPath = "/api/channels/" + m.channels[idx].numStr + "/feeds"
-    t.apiTag = "feeds"
-    t.apiCtx = { idx: idx }
-    t.observeField("result", "onFeedsApi")
-    m.feedTask = t
-    t.control = "RUN"
+    k = placesKey()
+    if k = "" then return
+    m.swfSeq = m.swfSeq + 1
+    m.swf = { key: k, idx: -1, wait: 1, feeds: invalid, seq: m.swfSeq }
+    if m.extern = invalid and m.playIdx >= 0 then
+        m.swf.idx = m.playIdx
+        m.swf.wait = 2
+        t = CreateObject("roSGNode", "LoadTask")
+        t.mode = "api"
+        t.baseUrl = m.base
+        t.apiPath = "/api/channels/" + m.channels[m.playIdx].numStr + "/feeds"
+        t.apiTag = "feeds"
+        t.apiCtx = { key: k, seq: m.swfSeq }
+        t.observeField("result", "onFeedsApi")
+        m.feedTask = t
+        t.control = "RUN"
+    end if
+    loadPlaces(true)
 end sub
 
 sub onFeedsApi(event as Object)
     r = event.getData()
-    if r = invalid or r.ctx.idx <> m.playIdx then return
-    ' the answer can be slow: not when another screen, a dialog or the menu is up by then
+    if r = invalid or r.ctx = invalid or m.swf = invalid or r.ctx.seq <> m.swf.seq then return
+    if r.ok = true and Type(r.data) = "roArray" and r.data.Count() > 0 then m.swf.feeds = r.data
+    swfDone()
+end sub
+
+sub swfDone()
+    s = m.swf
+    if s = invalid then return
+    s.wait = s.wait - 1
+    if s.wait > 0 then return
+    m.swf = invalid
+    if s.key <> placesKey() then return          ' changed channel meanwhile
+    ' the answers can be slow: not when another screen, a dialog or the menu is up by then
     if m.mode <> "live" or m.dlg <> invalid or m.menu.visible then return
-    if not r.ok or Type(r.data) <> "roArray" or r.data.Count() = 0 then
-        showToast("Can't list this channel's feeds")
+    isFeed = (m.extern <> invalid)
+    own = []
+    if s.feeds <> invalid and s.idx >= 0 and s.idx = m.playIdx then
+        m.channels[s.idx].alts = s.feeds.Count() - 1     ' Setup may have changed them since the list loaded
+        if s.feeds.Count() > 1 then own = s.feeds
+    end if
+    m.placeOpts = placeOpts()
+    others = m.placeOpts.Count()
+    if own.Count() = 0 and others = 0 then
+        if isFeed then
+            showToast("Nothing else has this game")
+        else if s.feeds = invalid then
+            showToast("Can't list this channel's feeds")
+        else
+            showToast("This channel has only one feed now")
+        end if
         return
     end if
-    m.channels[m.playIdx].alts = r.data.Count() - 1      ' Setup may have changed them since the list loaded
-    if r.data.Count() < 2 then
-        showToast("This channel has only one feed now")
-        return
-    end if
-    items = feedItems(r.data, m.alt)
+    items = feedItems(own, m.alt)
+    items.Append(placeItems(m.placeOpts))
     items.Push({ id: "fdback", label: "Back to menu" })
-    ch = m.channels[m.playIdx]
+    what = "this game"
+    if m.places <> invalid and m.places.game <> invalid and anyStr(m.places.game.name) <> "" then what = anyStr(m.places.game.name)
+    if own.Count() > 0 and others > 0 then
+        blurb = "Pick a feed of this channel, or another place showing " + what + "."
+    else if own.Count() > 0 then
+        blurb = "Pick a feed to watch it now. Setup > Channels sets which one plays first."
+    else if others = 1 then
+        blurb = "One other place has " + what + ". If this one doesn't work, try it."
+    else
+        blurb = others.ToStr() + " other places have " + what + ". If this one doesn't work, try the next."
+    end if
     m.hud.callFunc("hideAll")
     m.menuPage = "feeds"
-    m.menu.heading = "Switch feed: " + ch.numStr + " " + ch.name
-    m.menu.subtitle = "Pick a feed to watch now. Setup > Channels sets which one plays first."
+    if isFeed then
+        m.menu.heading = "Switch feed: " + plainText(anyStr(m.extern.title))
+    else
+        ch = m.channels[m.playIdx]
+        m.menu.heading = "Switch feed: " + ch.numStr + " " + ch.name
+    end if
+    m.menu.subtitle = blurb
     m.menu.items = items
     m.menu.callFunc("openMenu")
 end sub
@@ -2663,6 +2821,7 @@ end sub
 
 ' Back: a page of Settings goes back to Settings, Settings and Switch feed to the menu, the menu closes
 sub onMenuClose()
+    if mvMenuBack() then return
     if m.menuPage = "leagues" or m.menuPage = "themes" or m.menuPage = "buffer" then
         showSettings()
         return
@@ -2676,6 +2835,7 @@ end sub
 
 sub onMenuSelected()
     id = m.menu.selected
+    if mvMenuSelected(id) then return
     if m.menuPage = "leagues" then
         if Left(id, 3) = "lg_" then
             toggleLeague(Mid(id, 4))
@@ -2698,15 +2858,6 @@ sub onMenuSelected()
         end if
         return
     end if
-    if m.menuPage = "pickfeed" then
-        closeMenuView()
-        idx = m.pickIdx
-        m.pickIdx = -1
-        if Left(id, 3) = "fd_" and idx >= 0 and idx < m.channels.Count() then
-            if m.channels[idx].numStr = m.pickNum then playFeedOf(idx, Int(Val(Mid(id, 4))))
-        end if
-        return
-    end if
     if m.menuPage = "feeds" then
         if Left(id, 3) = "fd_" then
             alt = Int(Val(Mid(id, 4)))
@@ -2714,6 +2865,20 @@ sub onMenuSelected()
             if alt <> m.alt and m.playIdx >= 0 then
                 showToast(m.channels[m.playIdx].numStr + ": " + LCase(feedLabel(alt)) + " feed")
                 playChannelFeed(m.playIdx, alt)
+            end if
+        else if Left(id, 3) = "pl_" then
+            ' another channel or event feed showing the game
+            i = Int(Val(Mid(id, 4)))
+            opts = m.placeOpts
+            m.placeOpts = []
+            closeMenuView()
+            if i >= 0 and i < opts.Count() then
+                op = opts[i]
+                if op.ch <> invalid then
+                    watchChannelNum(numToStr(op.ch.number), anyStr(op.ch.name))
+                else
+                    watchFeed(op.f)
+                end if
             end if
         else if id = "fdback" then
             showMenu()
@@ -2764,7 +2929,9 @@ sub onMenuSelected()
 end sub
 
 sub runMenuAction(action as String)
-    if action = "home" then
+    if action = "mv" then
+        mvOpen()
+    else if action = "home" then
         openHome()
     else if action = "homestart" then
         if homeAtStart() then regWrite("homeStart", "0") else regWrite("homeStart", "1")
@@ -3440,6 +3607,7 @@ sub startVod(it as Object, start as Float, back as Boolean)
     if m.mode = "guide" then closeGuide()
     if m.mode = "sports" then closeSports()
     if m.mode = "search" then closeSearch()
+    if mvVodRoute(it, start) then return        ' multiview: in a small picture
     if m.vod <> invalid then vodLeave()
     setPreviewSize(false)
     m.mode = "vod"
@@ -3462,6 +3630,7 @@ end sub
 sub vodStart(at as Float)
     v = m.vod
     if v = invalid then return
+    mvForget()
     m.seekTimer.control = "stop"
     m.parkTimer.control = "stop"
     m.retryTimer.control = "stop"
@@ -3902,6 +4071,7 @@ sub applySettings(d as Object)
     dv = true
     if d.dvr_enabled <> invalid and GetInterface(d.dvr_enabled, "ifBoolean") <> invalid then dv = d.dvr_enabled
     setFeatures(vo, dv)
+    mvSettings(d)
     on = false
     v = d.home_screen
     if v <> invalid and GetInterface(v, "ifBoolean") <> invalid then on = v
@@ -4070,17 +4240,26 @@ sub homeTune(num as String)
     tuneTo(idx)
 end sub
 
-' a game on now: its channel, or the event feed that carries it
+' a game on now: straight to the best place showing it (an event feed checked live, else its channel),
+' no asking; Menu > Switch feed lists the other places
 sub homeGame(p as Dynamic)
     if Type(p) <> "roAssociativeArray" then return
-    if Type(p.ch) = "roAssociativeArray" then
+    opts = gameOpts(p, "", "")
+    ' its channel outside this Roku's list (gameOpts leaves it out) still beats a feed nobody has checked
+    if opts.Count() > 0 and opts[0].f <> invalid and anyStr(opts[0].f.status) <> "ok" and Type(p.ch) = "roAssociativeArray" then opts = []
+    if opts.Count() > 0 and opts[0].f <> invalid then
+        f = opts[0].f
+        leaveHome()
+        if mvRoute({ f: f }) then return
+        playExternal({ num: "EVENT", name: anyStr(f.group), title: plainText(anyStr(f.name)), url: m.base + "/api/feed/stream?key=" + urlEncode(anyStr(f.key)), key: anyStr(f.key) })
+        showBanner()
+    else if opts.Count() > 0 then
+        leaveHome()
+        watchChannelNum(numToStr(opts[0].ch.number), anyStr(opts[0].ch.name))
+    else if Type(p.ch) = "roAssociativeArray" then
+        ' its channel isn't in this Roku's list: TunerBox can still stream it
         leaveHome()
         watchChannelNum(numToStr(p.ch.number), anyStr(p.ch.name))
-    else if Type(p.feed) = "roAssociativeArray" and anyStr(p.feed.key) <> "" then
-        f = p.feed
-        leaveHome()
-        playExternal({ num: "EVENT", name: anyStr(f.group), title: plainText(anyStr(f.name)), url: m.base + "/api/feed/stream?key=" + urlEncode(anyStr(f.key)) })
-        showBanner()
     else
         showToast("None of your channels carry this game")
     end if
@@ -4185,6 +4364,7 @@ end sub
 ' The recorded file is played as it is (GET /api/recordings/<id>/file), so skipping is a normal seek.
 ' Where you got to is saved on TunerBox, so any screen can resume it.
 sub playRecording(it as Object, from as Float)
+    mvForget()
     if m.menu.visible then m.menu.callFunc("closeMenu")
     coverHome()
     m.hud.callFunc("hideAll")
