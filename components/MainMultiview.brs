@@ -532,7 +532,14 @@ end sub
 sub mvSoundDone(r as Object)
     if m.mv = invalid or r.ctx = invalid then return
     if r.ok = true and Type(r.data) = "roAssociativeArray" and r.data.ok = true then return
-    if r.ctx.slot = m.mv.sound and m.video.state = "playing" then mvStartStream()
+    if r.ctx.slot <> m.mv.sound then return
+    if m.video.state = "playing" then
+        mvStartStream()
+    else
+        ' not playing yet (the stream is restarting): ask again once it plays (mvVideoState calls mvSound),
+        ' else the stream keeps the sound it was asked for before the highlight moved
+        m.mv.streamSound = 0
+    end if
 end sub
 
 sub onMvPoll()
