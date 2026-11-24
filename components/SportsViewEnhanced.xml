@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<component name="SportsViewEnhanced" extends="Group">
+  <script type="text/brightscript" uri="pkg:/components/SportsViewEnhanced.brs" />
+  <script type="text/brightscript" uri="pkg:/source/utils.brs" />
+  <interface>
+    <!-- inputs from the scene -->
+    <field id="data" type="assocarray" onChange="onData" />
+    <field id="group" type="assocarray" onChange="onGroup" />
+    <!-- live game schedule matched to the guide: { ok, leagues, hasGuide, showUnmatched, games: [...] } (LoadTask "espn") -->
+    <field id="games" type="assocarray" onChange="onGames" />
+    <field id="checkState" type="assocarray" alwaysNotify="true" onChange="onCheck" />
+    <field id="message" type="string" onChange="onMessage" />
+    <!-- outputs to the scene -->
+    <field id="groupName" type="string" />
+    <field id="request" type="assocarray" alwaysNotify="true" />
+    <function name="openSports" />
+    <function name="closeSports" />
+  </interface>
+  <children>
+    <Rectangle translation="[-200,-200]" width="2320" height="1480" color="0x00000099" />
+    <Rectangle translation="[30,24]" width="1860" height="1032" color="0x0B2A6AF6" />
+    <Rectangle translation="[30,24]" width="1860" height="3" color="0x4F86E8FF" />
+    <Rectangle translation="[30,1053]" width="1860" height="3" color="0x4F86E8FF" />
+    <Rectangle translation="[30,24]" width="3" height="1032" color="0x4F86E8FF" />
+    <Rectangle translation="[1887,24]" width="3" height="1032" color="0x4F86E8FF" />
+    <!-- the list of sports down the left -->
+    <Rectangle translation="[33,27]" width="450" height="1026" color="0x00000033" />
+    <Rectangle translation="[483,27]" width="2" height="1026" color="0x4F86E855" />
+    <Label id="titleLbl" translation="[60,36]" width="410" height="56" vertAlign="center" text="Sports &amp; Events" color="0xFFFFFFFF" font="font:LargeBoldSystemFont" />
+    <Group id="railGroup" />
+    <!-- what's picked, on the right -->
+    <Label id="secLbl" translation="[510,36]" width="760" height="56" vertAlign="center" color="0xFFFFFFFF" font="font:LargeBoldSystemFont" />
+    <Label id="statusLbl" translation="[1270,36]" width="590" height="56" horizAlign="right" vertAlign="center" color="0xAFC8F5FF" font="font:SmallSystemFont" />
+    <Group id="heroGroup" />
+    <Group id="rowsGroup" />
+    <Label id="msgLbl" translation="[500,420]" width="1360" height="80" horizAlign="center" vertAlign="center" color="0xDCE8FFFF" font="font:MediumSystemFont" />
+    <Label id="footLbl" translation="[60,1004]" width="1800" height="40" vertAlign="center" color="0xC5D3EFFF" font="font:SmallSystemFont" />
+  </children>
+</component>

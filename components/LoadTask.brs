@@ -163,6 +163,9 @@ sub loadSports()
         if Type(st) = "roAssociativeArray" then
             v = st.sports_show_unmatched
             if (Type(v) = "Boolean" or Type(v) = "roBoolean") and v = false then d.show_unmatched = false
+            ' Settings > Sports > layout: "enhanced" or "basic" (absent on an older TunerBox: Basic)
+            lay = st.sports_layout
+            if Type(lay) = "String" or Type(lay) = "roString" then d.layout = lay
         end if
         result.data = d
         result.ok = true

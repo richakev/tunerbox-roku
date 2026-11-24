@@ -111,9 +111,19 @@ for this Roku only and is sent as `buf=` on live channel and event streams.
 
 ## Sports & Events
 SPORTS (top bar, `T` on a keyboard, or the guide menu) opens the same panel as the TunerBox web UI, fed by `/api/sports`:
-- **On Now / Coming Up / Sports Channels / Events** tabs (Left/Right switches, Up/Down scrolls, Rew/FF page).
+- Two layouts, picked in TunerBox Setup › Settings › Sports › *Sports & Events layout* (read from `/api/settings`
+  `sports_layout`; an older TunerBox without it gets Basic). The Roku opens the one it used last and switches once
+  if TunerBox says otherwise.
+- **Basic** (`SportsView`): **On Now / Coming Up / Sports Channels / Events** tabs (Left/Right switches, Up/Down scrolls, Rew/FF page).
+- **Enhanced** (`SportsViewEnhanced`): the sports down the left (Up/Down pick, Right or OK goes in, Left or Back comes
+  back) and the one picked on the right: the biggest game or event in a box at the top (a favorite team's, then a close
+  one, tagged CLOSE GAME / OVERTIME), then a list with progress bars, under Today / Tomorrow on a sport's page. Replays
+  and shows (`kind` from a newer TunerBox) are folded under "Show N replays and shows"; sports with nothing on today
+  are under More sports.
 - OK on something airing watches it (works even for channels hidden by "Hide unmapped"). OK on a future program offers **Record**, which now posts to `/api/recordings` (the guide's Record uses the same call).
 - Events: pick a group, optionally "Check which feeds are live now", then OK to watch a feed. Back returns to the group list, then closes.
+- Live sports leagues (Menu › Live sports leagues) include UFC and PFL: a fight card is listed under its name and matched
+  to the guide by its main event's fighters, at the main card's start time.
 
 ## On Demand (movies & TV shows)
 ON DEMAND (top bar, `O` on a keyboard, or the guide's `*` menu) opens the same screen as the TunerBox web UI, fed by `/api/vod/*`:

@@ -21,7 +21,12 @@ sub init()
     m.savedGuideTimer = m.top.findNode("savedGuideTimer")
     m.savedGuideTimer.observeField("fire", "startSavedGuide")
     m.savedGuideWait = false
-    m.sports = m.top.findNode("sports")
+    ' Sports & Events comes in two layouts (TunerBox Setup › Settings › Sports): Basic (SportsView, the
+    ' default) and Enhanced (SportsViewEnhanced). m.sports is the one in use: the last one TunerBox asked for.
+    m.sportsBasic = m.top.findNode("sports")
+    m.sportsEnh = m.top.findNode("sportsx")
+    m.sports = m.sportsBasic
+    if regRead("sportsLayout", "basic") = "enhanced" then m.sports = m.sportsEnh
     m.stats = m.top.findNode("stats")
     m.statsTasks = []
     m.statsSeq = 0
@@ -131,7 +136,8 @@ sub init()
     m.guide.observeField("exitRequest", "onGuideExit")
     m.guide.observeField("notice", "onGuideNotice")
     m.hud.observeField("buttonSelected", "onHudButton")
-    m.sports.observeField("request", "onSportsRequest")
+    m.sportsBasic.observeField("request", "onSportsRequest")
+    m.sportsEnh.observeField("request", "onSportsRequest")
     m.stats.observeField("request", "onStatsRequest")
     m.search.observeField("query", "onSearchQuery")
     m.search.observeField("request", "onSearchRequest")
@@ -1592,6 +1598,7 @@ sub onSportsTaskResult(event as Object)
     md = t.mode
     if md = "sports" then
         if r.ok = true then
+            useSportsLayout(r.data.layout)
             m.sports.data = r.data
         else if sportsLeagueSel() <> "" then
             ' live games can still be listed without the TunerBox sports feed
@@ -1628,6 +1635,23 @@ sub onSportsTaskResult(event as Object)
             end if
         end if
     end if
+end sub
+
+' TunerBox says which layout Sports & Events uses ("enhanced"; anything else, or an older TunerBox
+' without the setting, is Basic). The one already open is swapped for the other, and the Roku remembers.
+sub useSportsLayout(layout as Dynamic)
+    want = "basic"
+    if Type(layout) = "String" or Type(layout) = "roString" then
+        if layout = "enhanced" then want = "enhanced"
+    end if
+    node = m.sportsBasic
+    if want = "enhanced" then node = m.sportsEnh
+    if m.sports.isSameNode(node) then return
+    regWrite("sportsLayout", want)
+    m.sports.callFunc("closeSports")
+    m.sports = node
+    m.sports.callFunc("openSports")
+    runGamesTask()           ' the live games went to the other one
 end sub
 
 sub onCheckTimer()
@@ -2289,7 +2313,7 @@ sub applyScreenFit()
     pct = Val(regRead("fit", "2.5")) / 100.0
     m.fitScale = 1.0 - 2.0 * pct
     m.fitOff = [Int(1920 * pct + 0.5), Int(1080 * pct + 0.5)]
-    for each n in [m.sports, m.search, m.od, m.menu, m.statusGroup, m.toast]
+    for each n in [m.sportsBasic, m.sportsEnh, m.search, m.od, m.menu, m.statusGroup, m.toast]
         n.scale = [m.fitScale, m.fitScale]
         n.translation = m.fitOff
     end for

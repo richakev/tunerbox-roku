@@ -24,6 +24,7 @@
     </Group>
     <PlayerHud id="hud" visible="false" />
     <SportsView id="sports" visible="false" />
+    <SportsViewEnhanced id="sportsx" visible="false" />
     <StatsView id="stats" visible="false" />
     <SearchView id="search" visible="false" />
     <HomeView id="home" visible="false" />
