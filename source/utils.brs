@@ -667,7 +667,10 @@ function sportsLeagues() as Object
         { id: "ncaaw", label: "Women's College Hoops", abbr: "NCAAW", path: "basketball/womens-college-basketball", groups: "50", college: true, kw: ["college basketball", "basketball", "ncaa"] },
         { id: "nhl", label: "NHL Hockey", abbr: "NHL", path: "hockey/nhl", groups: "", college: false, kw: ["nhl", "hockey"] },
         { id: "mls", label: "MLS Soccer", abbr: "MLS", path: "soccer/usa.1", groups: "", college: false, kw: ["mls", "soccer"] },
-        { id: "epl", label: "Premier League", abbr: "EPL", path: "soccer/eng.1", groups: "", college: false, kw: ["premier league", "soccer", "football"] }
+        { id: "epl", label: "Premier League", abbr: "EPL", path: "soccer/eng.1", groups: "", college: false, kw: ["premier league", "soccer", "football"] },
+        ' fight cards: an ESPN event is a card of fights between two fighters (LoadTask espnCard)
+        { id: "ufc", label: "UFC", abbr: "UFC", path: "mma/ufc", groups: "", college: false, card: true, kw: ["ufc", "mma", "fight night"] },
+        { id: "pfl", label: "PFL", abbr: "PFL", path: "mma/pfl", groups: "", college: false, card: true, kw: ["pfl", "mma"] }
     ]
 end function
 

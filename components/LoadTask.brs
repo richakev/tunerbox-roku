@@ -267,6 +267,7 @@ sub loadLiveSports()
         if g.chans.Count() > 0 then result.matched = result.matched + 1
         g.Delete("teams")
         g.Delete("kw")
+        g.Delete("ms")
     end for
     games.SortBy("start")
     result.games = games
@@ -375,7 +376,34 @@ end function
 ' lower-case, punctuation -> spaces, padded so " word " tests whole words
 function normText(s as String) as String
     if m.normRe = invalid then m.normRe = CreateObject("roRegex", "[^a-z0-9]+", "")
-    return " " + m.normRe.ReplaceAll(LCase(s), " ").Trim() + " "
+    return " " + m.normRe.ReplaceAll(foldAccents(LCase(s)), " ").Trim() + " "
+end function
+
+' "procházka" -> "prochazka", so a guide that writes a name either way still matches. Only text with
+' something past ASCII is looked at (nearly all of it has nothing to fold), a character at a time: roRegex
+' may compare bytes, not characters.
+function foldAccents(s as String) as String
+    if m.wideRe = invalid then
+        m.wideRe = CreateObject("roRegex", "[^\x00-\x7F]", "")
+        m.folds = {}
+        m.folds.SetModeCaseSensitive()
+        ' lower case and capitals: LCase may leave an accented capital as it is ("PROCHÁZKA")
+        for each f in [["àáâãäåāăąÀÁÂÃÄÅĀĂĄ", "a"], ["çćčÇĆČ", "c"], ["ďđĎĐ", "d"], ["èéêëēėęěÈÉÊËĒĖĘĚ", "e"], ["ğĞ", "g"],
+                       ["ìíîïīįıÌÍÎÏĪĮİ", "i"], ["łŁ", "l"], ["ñńňÑŃŇ", "n"], ["òóôõöøōőÒÓÔÕÖØŌŐ", "o"], ["řŘ", "r"],
+                       ["śšşŚŠŞ", "s"], ["ťţŤŢ", "t"], ["ùúûüūůűÙÚÛÜŪŮŰ", "u"], ["ýÿÝŸ", "y"], ["źżžŹŻŽ", "z"]]
+            for i = 1 to Len(f[0])
+                m.folds[Mid(f[0], i, 1)] = f[1]
+            end for
+        end for
+    end if
+    if not m.wideRe.IsMatch(s) then return s
+    out = ""
+    for i = 1 to Len(s)
+        ch = Mid(s, i, 1)
+        if m.folds.DoesExist(ch) then ch = m.folds[ch]
+        out = out + ch
+    end for
+    return out
 end function
 
 sub addNeedle(list as Object, s as String)
@@ -397,6 +425,7 @@ end function
 ' one ESPN event -> game, or invalid when it's finished / unusable
 function espnGame(ev as Object, lg as Object, now as Integer) as Object
     if ev.competitions = invalid or ev.competitions.Count() = 0 then return invalid
+    if lg.card <> invalid and lg.card then return espnCard(ev, lg, now)
     comp = ev.competitions[0]
     st = ev.status
     if st = invalid then st = comp.status
@@ -472,6 +501,93 @@ function espnGame(ev as Object, lg as Object, now as Integer) as Object
         score: score
         nets: nets.Join(", ")
         teams: teams
+        ms: start
+        chans: []
+    }
+end function
+
+' A fight card (UFC, PFL) as a game: the card's name ("UFC Fight Night: Procházka vs. Stirling"), and the
+' main event's two fighters (the card's last fight) as its teams. It starts with the prelims; guides list
+' the main card, hours later, so that's what it is matched by (ms).
+function espnCard(ev as Object, lg as Object, now as Integer) as Object
+    st = ev.status
+    if st = invalid or st.type = invalid then return invalid
+    state = jsStr(st.type.state)
+    if state <> "pre" and state <> "in" then return invalid
+    start = isoEpoch(ev.date)
+    if start = 0 then return invalid
+    fights = []
+    for each c in ev.competitions
+        if Type(c) = "roAssociativeArray" and c.competitors <> invalid and c.competitors.Count() = 2 then fights.Push(c)
+    end for
+    if fights.Count() = 0 then return invalid
+    last = fights[fights.Count() - 1]
+    main = start
+    for each c in fights
+        t = isoEpoch(c.date)
+        if t > main then main = t
+    end for
+    if state = "pre" and main < now - 6 * 3600 then return invalid   ' stale / never updated
+    tv = last.timeValid
+    if state = "pre" and (Type(tv) = "Boolean" or Type(tv) = "roBoolean") then
+        if not tv then return invalid                                ' "TBD": the date is a placeholder
+    end if
+
+    teams = []
+    for each c in last.competitors
+        a = c.athlete
+        if a = invalid then return invalid
+        full = jsStr(a.displayName)
+        if full = "" then return invalid
+        parts = full.Split(" ")
+        lastName = parts[parts.Count() - 1]
+        strong = []
+        addNeedle(strong, full)
+        addNeedle(strong, lastName)
+        ord = 0
+        if c.order <> invalid then ord = c.order
+        teams.Push({ short: lastName, abbr: lastName, score: "", strong: strong, weak: [], ord: ord })
+    end for
+    if teams.Count() < 2 then return invalid
+    if teams[0].ord > teams[1].ord then teams = [teams[1], teams[0]]
+
+    detail = ""
+    if state = "in" and main > start then
+        ' which part of the card is on: the first fight that isn't over
+        detail = "Main card"
+        for each c in fights
+            cs = c.status
+            if cs = invalid or cs.type = invalid or jsStr(cs.type.state) <> "post" then
+                if isoEpoch(c.date) < main then detail = "Prelims"
+                exit for
+            end if
+        end for
+    end if
+    nets = []
+    if last.broadcasts <> invalid then
+        for each b in last.broadcasts
+            if b.names <> invalid then
+                for each nm in b.names
+                    addNet(nets, jsStr(nm))
+                end for
+            end if
+        end for
+    end if
+    title = jsStr(ev.name)
+    if title = "" then title = teams[0].short + " vs " + teams[1].short
+    return {
+        id: jsStr(ev.id)
+        lg: lg.id
+        league: lg.abbr
+        kw: lg.kw
+        title: title
+        start: start
+        state: state
+        detail: detail
+        score: ""
+        nets: nets.Join(", ")
+        teams: teams
+        ms: main
         chans: []
     }
 end function
@@ -518,10 +634,11 @@ function matchGames(games as Object, now as Integer) as Boolean
     tParse = t0.TotalMilliseconds()
     names = invalid   ' channel names: only loaded once a listing looks like a game
 
-    lo = games[0].start
+    ' a game is matched by when its listings start: kickoff, or a fight card's main card (ms)
+    lo = games[0].ms
     hi = lo
     for i = 0 to games.Count() - 1
-        gs = games[i].start
+        gs = games[i].ms
         if gs < lo then lo = gs
         if gs > hi then hi = gs
         nn = []
@@ -538,7 +655,7 @@ function matchGames(games as Object, now as Integer) as Boolean
     slots = CreateObject("roArray", Int(hi / 900) - base + 1, true)
     slots[Int(hi / 900) - base] = invalid
     for i = 0 to games.Count() - 1
-        gs = games[i].start
+        gs = games[i].ms
         for b = Int((gs - 3600) / 900) to Int((gs + 2700) / 900)
             if slots[b - base] = invalid then slots[b - base] = []
             slots[b - base].Push(i)
@@ -572,7 +689,7 @@ function matchGames(games as Object, now as Integer) as Boolean
                         catTxt = invalid
                         for each gi in cands
                             g = games[gi]
-                            if g.start >= st - 2700 and g.start <= st + 3600 then
+                            if g.ms >= st - 2700 and g.ms <= st + 3600 then
                                 ts = 0
                                 for each tm in g.teams
                                     if hasAny(txt, tm.strong) then
