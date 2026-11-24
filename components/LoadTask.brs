@@ -183,6 +183,9 @@ sub loadSports()
             ' Settings > Sports > layout: "enhanced" or "basic" (absent on an older TunerBox: Basic)
             lay = st.sports_layout
             if Type(lay) = "String" or Type(lay) = "roString" then d.layout = lay
+            ' TunerBox matches the games to the guide itself (its scoreboard, 1.8.0 and newer) when leagues or
+            ' favorite teams are picked in Settings > Sports: its rows then carry the game ("event")
+            d.server_games = (nonEmpty(st.sports_leagues) or nonEmpty(st.sports_teams))
         end if
         result.data = d
         result.ok = true
@@ -190,6 +193,10 @@ sub loadSports()
     print "[TunerBox] sports: ok=" + result.ok.ToStr()
     m.top.result = result
 end sub
+
+function nonEmpty(v as Dynamic) as Boolean
+    return Type(v) = "roArray" and v.Count() > 0
+end function
 
 sub loadSportsGroup()
     result = { ok: false, data: invalid }
@@ -282,7 +289,7 @@ sub loadLiveSports()
     end for
     print "[TunerBox] live sports: " + games.Count().ToStr() + " games from " + urls.Count().ToStr() + " requests in " + t0.TotalMilliseconds().ToStr() + " ms"
 
-    result.hasGuide = matchGames(games, now)
+    result.hasGuide = matchCached(games, now)
     for each g in games
         if g.chans.Count() > 0 then result.matched = result.matched + 1
         g.Delete("teams")
@@ -425,6 +432,16 @@ function foldAccents(s as String) as String
     end for
     return out
 end function
+
+' the longest word of a needle (" red sox " -> "red"... "sox"), for matchGames' quick test: any listing the
+' needle matches has that word in its raw title, whatever the case and punctuation
+sub addTeamWord(words as Object, nd as String)
+    best = ""
+    for each w in nd.Trim().Split(" ")
+        if Len(w) > Len(best) then best = w
+    end for
+    if Len(best) >= 3 then words[best] = true
+end sub
 
 sub addNeedle(list as Object, s as String)
     n = normText(s)
@@ -640,6 +657,43 @@ end function
 '   +1 when the listing mentions the sport ("MLB", "Baseball"), +1 when the channel is one ESPN lists (ESPN, FOX...)
 '   needs team points >= 2 and total >= 4 (two teams by name; or one team + sport + network)
 ' Returns false when there's no cached guide to match against.
+' matchGames, kept: which channels show a game only changes with the guide, so the matches are saved with
+' the saved guide's stamp (its size and time) and reused; only games not seen with this guide are matched,
+' and when there are none the guide isn't even read.
+function matchCached(games as Object, now as Integer) as Boolean
+    stamp = guideStamp()
+    if stamp = "" then return matchGames(games, now)
+    kept = {}
+    c = invalid
+    txt = readCache("livematch")
+    if txt <> "" then c = ParseJson(txt)        ' (none saved yet: nothing to parse)
+    if Type(c) = "roAssociativeArray" and c.guide = stamp and Type(c.games) = "roAssociativeArray" then kept = c.games
+    todo = []
+    for each g in games
+        k = g.lg + ":" + g.id + ":" + g.ms.ToStr()
+        if kept[k] <> invalid then g.chans = kept[k] else todo.Push(g)
+    end for
+    print "[TunerBox] live sports: " + (games.Count() - todo.Count()).ToStr() + " games matched before with this guide, " + todo.Count().ToStr() + " to match"
+    if todo.Count() = 0 then return true
+    hasGuide = matchGames(todo, now)
+    if not hasGuide then return false
+    for each g in todo
+        kept[g.lg + ":" + g.id + ":" + g.ms.ToStr()] = g.chans
+    end for
+    writeCache("livematch", FormatJson({ guide: stamp, games: kept }))
+    return true
+end function
+
+' the saved guide's size and when it was written ("" with none): a new guide means new matches
+function guideStamp() as String
+    fs = CreateObject("roFileSystem")
+    path = cachePath("guide")
+    if not fs.Exists(path) then return ""
+    st = fs.Stat(path)
+    if st = invalid or st.mtime = invalid then return ""
+    return anyStr(st.size) + "|" + st.mtime.AsSeconds().ToStr()
+end function
+
 function matchGames(games as Object, now as Integer) as Boolean
     if games.Count() = 0 then return true
     t0 = CreateObject("roTimespan")
@@ -681,6 +735,28 @@ function matchGames(games as Object, now as Integer) as Boolean
             slots[b - base].Push(i)
         end for
     end for
+    ' a listing can only match when its title names a team: one quick test of the raw title against every
+    ' team's words first (a superset of what the full match accepts: normText only lower-cases and spaces
+    ' out punctuation), so the few that name a team get the full treatment, not the thousands that don't.
+    ' Text with accents skips it (folded, "Procházka" names Prochazka).
+    words = {}
+    for each g in games
+        for each tm in g.teams
+            for each nd in tm.strong
+                addTeamWord(words, nd)
+            end for
+            for each nd in tm.weak
+                addTeamWord(words, nd)
+            end for
+        end for
+    end for
+    alts = []
+    for each w in words
+        alts.Push(w)
+    end for
+    teamRe = invalid
+    if alts.Count() > 0 then teamRe = CreateObject("roRegex", alts.Join("|"), "i")
+    wideRe = CreateObject("roRegex", "[^\x00-\x7F]", "")
     nNear = 0
     nTeam = 0
     tFrom = now - 3 * 3600
@@ -688,24 +764,58 @@ function matchGames(games as Object, now as Integer) as Boolean
     hasGuide = false
     skip = [" pregame ", " postgame ", " pre game ", " post game ", " highlights ", " classic ", " classics ", " replay ", " rewind ", " preview ", " recap ", " encore "]
 
+    ' the stretches of time a listing has to start in to be one of the games (each game's, merged)
+    wins = []
+    for each g in games
+        wins.Push({ lo: g.ms - 3600, hi: g.ms + 2700 })
+    end for
+    wins.SortBy("lo")
+    merged = []
+    for each w in wins
+        if merged.Count() > 0 and w.lo <= merged[merged.Count() - 1].hi then
+            if w.hi > merged[merged.Count() - 1].hi then merged[merged.Count() - 1].hi = w.hi
+        else
+            merged.Push({ lo: w.lo, hi: w.hi })
+        end if
+    end for
+    nNamed = 0
     for each num in programs
         rows = programs[num]
         chName = ""
         chNorm = invalid
         if Type(rows) <> "roArray" then rows = []
-        for each r in rows
+        n = rows.Count()
+        ' A channel's listings are in start order (TunerBox sends them so; the Roku sorts the ones it builds), so
+        ' only the listings that start near a game are walked: each stretch found by halving, not by reading
+        ' every listing
+        if n > 0 and not hasGuide then
+            if Int(rows[0][0]) < tTo and Int(rows[n - 1][1]) > tFrom then hasGuide = true
+        end if
+        for each w in merged
+        a = 0
+        b = n
+        while a < b
+            mid = Int((a + b) / 2)
+            if Int(rows[mid][0]) < w.lo then a = mid + 1 else b = mid
+        end while
+        for ri = a to n - 1
+            r = rows[ri]
             st = Int(r[0])
-            if not hasGuide then
-                if Int(r[1]) > tFrom and st < tTo then hasGuide = true
-            end if
-            cands = invalid
-            if st >= lo and st <= hi then cands = slots[Int(st / 900) - base]
+            if st > w.hi then exit for
+            cands = slots[Int(st / 900) - base]
             if cands <> invalid then
                 sp = Int(r[1])
                 if sp > tFrom and st < tTo then
                     nNear = nNear + 1
-                    txt = normText(jsStr(r[2]) + " " + jsStr(r[3]))
-                    if not hasAny(txt, skip) then
+                    raw = jsStr(r[2]) + " " + jsStr(r[3])
+                    named = true
+                    if teamRe <> invalid and not wideRe.IsMatch(raw) then named = teamRe.IsMatch(raw)
+                    txt = ""
+                    if named then
+                        nNamed = nNamed + 1
+                        txt = normText(raw)
+                    end if
+                    if named and not hasAny(txt, skip) then
                         catTxt = invalid
                         for each gi in cands
                             g = games[gi]
@@ -743,9 +853,10 @@ function matchGames(games as Object, now as Integer) as Boolean
                 end if
             end if
         end for
+        end for
     end for
     print "[TunerBox] live sports: guide read " + tParse.ToStr() + " ms, matching " + (t0.TotalMilliseconds() - tParse).ToStr() + " ms"
-    print "[TunerBox] live sports: " + nNear.ToStr() + " listings start near a game, " + nTeam.ToStr() + " name a team"
+    print "[TunerBox] live sports: " + nNear.ToStr() + " listings start near a game, " + nNamed.ToStr() + " pass the team-name check, " + nTeam.ToStr() + " name a team"
     if not hasGuide then
         for each g in games
             g.Delete("netNeedles")

@@ -27,6 +27,10 @@ sub init()
     m.sportsEnh = m.top.findNode("sportsx")
     m.sports = m.sportsBasic
     if regRead("sportsLayout", "basic") = "enhanced" then m.sports = m.sportsEnh
+    ' TunerBox matches live games to the guide itself (its scoreboard): the Enhanced layout shows its
+    ' games and this Roku doesn't fetch and match them again (as last heard, until /api/sports says)
+    m.serverGames = (regRead("sportsServerGames", "0") = "1")
+    m.gamesAsked = false    ' this Roku's own live-games matching was started for the Sports screen open now
     m.stats = m.top.findNode("stats")
     m.statsTasks = []
     m.statsSeq = 0
@@ -1351,6 +1355,7 @@ sub openSports()
     m.mode = "sports"
     m.sportsGroupName = ""
     m.sports.callFunc("openSports")
+    m.gamesAsked = false
     runSportsTask("sports", "")
     runGamesTask()
 end sub
@@ -1358,10 +1363,13 @@ end sub
 ' live game schedule for the leagues picked in MENU > Live sports leagues, matched to the guide
 sub runGamesTask()
     sel = sportsLeagueSel()
+    ' TunerBox already matched them (Enhanced shows its rows' games): nothing to fetch or match here
+    if m.serverGames and m.sports.isSameNode(m.sportsEnh) then sel = ""
     if sel = "" then
         m.sports.games = { ok: true, leagues: "", games: [] }
         return
     end if
+    m.gamesAsked = true
     t = CreateObject("roSGNode", "LoadTask")
     t.mode = "espn"
     t.baseUrl = m.base
@@ -1598,8 +1606,17 @@ sub onSportsTaskResult(event as Object)
     md = t.mode
     if md = "sports" then
         if r.ok = true then
+            sg = false
+            v = r.data.server_games
+            if Type(v) = "Boolean" or Type(v) = "roBoolean" then sg = v
+            if sg <> m.serverGames then
+                m.serverGames = sg
+                if sg then regWrite("sportsServerGames", "1") else regWrite("sportsServerGames", "0")
+            end if
             useSportsLayout(r.data.layout)
             m.sports.data = r.data
+            ' this Roku skipped its own matching, but TunerBox no longer does it: match them here after all
+            if not sg and m.sports.isSameNode(m.sportsEnh) and sportsLeagueSel() <> "" and not m.gamesAsked then runGamesTask()
         else if sportsLeagueSel() <> "" then
             ' live games can still be listed without the TunerBox sports feed
             m.sports.data = { on_now: [], upcoming: [], channels: [], groups: [] }
@@ -1608,6 +1625,8 @@ sub onSportsTaskResult(event as Object)
             m.sports.message = "Could not load Sports & Events from TunerBox. Press Back."
         end if
     else if md = "espn" then
+        ' TunerBox turned out to match the games itself: the Enhanced layout shows those
+        if m.serverGames and m.sports.isSameNode(m.sportsEnh) then return
         sel = t.leagues
         m.sports.games = { ok: (r.ok = true), leagues: sel, leagueNames: leagueNames(sel), hasGuide: (r.hasGuide = true), showUnmatched: (regRead("sportsUnmatched", "1") = "1"), games: r.games }
     else if md = "sgroup" then

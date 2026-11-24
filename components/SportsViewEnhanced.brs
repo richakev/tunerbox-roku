@@ -55,6 +55,21 @@ sub init()
     m.nVis = m.NROWS
     m.drawnTop = -1
     m.drawnSel = -1
+    ' Moving down the sports list only moves the highlight: the counts (railStat) and each section's list
+    ' (itemCache) are made once per change of the listings (m.ver, bumped in mergeLists and by Show
+    ' replays) and once a minute (what's live moves on), and the right side fills in when the highlight
+    ' stops (railTimer), not for every sport scrolled past.
+    m.ver = 0
+    m.eod = 0
+    m.eodAt = -1
+    m.dayLbl = {}
+    m.railStat = invalid
+    m.itemCache = {}
+    m.railTimer = CreateObject("roSGNode", "Timer")
+    m.railTimer.repeat = false
+    m.railTimer.duration = 0.2
+    m.railTimer.observeField("fire", "onRailTimer")
+    m.railPending = false   ' the highlight moved and the right side hasn't caught up yet
     buildNodes()
 end sub
 
@@ -130,6 +145,9 @@ end sub
 
 ' ------------------------------------------------------------ open / close
 sub openSports()
+    m.ver = m.ver + 1
+    m.itemCache = {}
+    m.railTimer.control = "stop"
     m.data = invalid
     m.games = invalid
     m.nowList = []
@@ -152,6 +170,8 @@ sub openSports()
 end sub
 
 sub closeSports()
+    m.railTimer.control = "stop"
+    m.railPending = false
     m.top.visible = false
     m.top.setFocus(false)
 end sub
@@ -181,6 +201,7 @@ end sub
 ' Coming up = upcoming games + the guide's upcoming sports, by start time
 ' A guide program that is also a matched game (same channel + start) only shows once, as the game.
 sub mergeLists()
+    m.ver = m.ver + 1
     m.nowList = []
     m.upList = []
     if m.data = invalid then return
@@ -196,8 +217,9 @@ sub mergeLists()
         if isFalse(m.games.showUnmatched) then showMissing = false
         if m.games.games <> invalid then
             for each g in m.games.games
+                g.ev = invalid
                 for each c in g.chans
-                    seen[strv(c.number) + "|" + intv(c.start).ToStr()] = true
+                    seen[strv(c.number) + "|" + intv(c.start).ToStr()] = g
                 end for
                 started = (g.state = "in" or intv(g.start) <= now)
                 if g.chans.Count() > 0 then
@@ -210,14 +232,32 @@ sub mergeLists()
     end if
     m.nowList.Append(gNow)
     for each p in m.data.on_now
-        if p.ch = invalid or seen[strv(p.ch.number) + "|" + intv(p.start).ToStr()] = invalid then m.nowList.Push(p)
+        if p.ch = invalid then
+            m.nowList.Push(p)
+        else
+            keepListing(p, seen[strv(p.ch.number) + "|" + intv(p.start).ToStr()], m.nowList)
+        end if
     end for
     m.nowList.Append(gNowMissing)
     for each p in m.data.upcoming
-        if p.ch = invalid or seen[strv(p.ch.number) + "|" + intv(p.start).ToStr()] = invalid then up.Push(p)
+        if p.ch = invalid then
+            up.Push(p)
+        else
+            keepListing(p, seen[strv(p.ch.number) + "|" + intv(p.start).ToStr()], up)
+        end if
     end for
     up.SortBy("start")
     m.upList = up
+end sub
+
+' a guide listing that's also a matched game shows once, as the game; the game keeps what TunerBox's
+' scoreboard said about the listing (your team's game, a close one, overtime)
+sub keepListing(p as Object, g as Dynamic, lst as Object)
+    if g = invalid then
+        lst.Push(p)
+    else if p.event <> invalid and g.ev = invalid then
+        g.ev = p.event
+    end if
 end sub
 
 sub onGroup()
@@ -324,7 +364,8 @@ function intv(v as Dynamic) as Integer
 end function
 
 function whenText(t as Integer) as String
-    if fmtDay(t) = fmtDay(nowEpoch()) then return fmtClock(t)
+    eod = midnight()
+    if t < eod and t >= eod - 86400 then return fmtClock(t)
     return Left(localDT(t).GetWeekday(), 3) + " " + fmtClock(t)
 end function
 
@@ -374,6 +415,12 @@ end function
 
 ' the rail's name for a row's sport: MMA and Boxing go together as Fights
 function groupOf(x as Object) as String
+    if x.rkGrp <> invalid then return x.rkGrp
+    x.rkGrp = groupOfRow(x)
+    return x.rkGrp
+end function
+
+function groupOfRow(x as Object) as String
     s = ""
     if isGame(x) then
         s = leagueSport(strv(x.lg))
@@ -387,6 +434,12 @@ function groupOf(x as Object) as String
 end function
 
 function kindOf(x as Object) as String
+    if x.rkKind <> invalid then return x.rkKind
+    x.rkKind = kindOfRow(x)
+    return x.rkKind
+end function
+
+function kindOfRow(x as Object) as String
     if isGame(x) then return "game"
     if x.event <> invalid then return "game"
     return strv(x.kind)
@@ -399,15 +452,28 @@ function hiddenRow(x as Object) as Boolean
 end function
 
 function liveRow(x as Object) as Boolean
+    if x.rkLive <> invalid then return x.rkLive
+    x.rkLive = liveOfRow(x)
+    return x.rkLive
+end function
+
+function liveOfRow(x as Object) as Boolean
     if isGame(x) then return x.state = "in"
     if x.event <> invalid then return strv(x.event.state) = "in"
     k = strv(x.kind)
     return intv(x.is_live) <> 0 or k = "live"
 end function
 
+' what TunerBox's scoreboard says about a row: a listing's own, or (a game) the listing it replaced
+function rowEv(x as Object) as Dynamic
+    if isGame(x) then return x.ev
+    return x.event
+end function
+
 function favRow(x as Object) as Boolean
-    if isGame(x) or x.event = invalid then return false
-    return Type(x.event.fav) = "roArray" and x.event.fav.Count() > 0
+    ev = rowEv(x)
+    if ev = invalid then return false
+    return Type(ev.fav) = "roArray" and ev.fav.Count() > 0
 end function
 
 function pctOf(x as Object) as Integer
@@ -510,9 +576,25 @@ function dayHead(x as Object) as String
     now = nowEpoch()
     st = intv(x.start)
     if st <= now then return "ON NOW"
-    if fmtDay(st) = fmtDay(now) then return "LATER TODAY"
-    if fmtDay(st) = fmtDay(now + 86400) then return "TOMORROW"
-    return UCase(fmtDay(st))
+    eod = midnight()
+    if st < eod then return "LATER TODAY"
+    if st < eod + 86400 then return "TOMORROW"
+    k = Int((st - eod) / 86400).ToStr()
+    if m.dayLbl[k] = invalid then m.dayLbl[k] = UCase(fmtDay(st))
+    return m.dayLbl[k]
+end function
+
+' midnight tonight (epoch secs), worked out once a minute; m.dayLbl: the later days' headings
+function midnight() as Integer
+    mn = Int(nowEpoch() / 60)
+    if m.eodAt <> mn then
+        now = nowEpoch()
+        lt = localDT(now)
+        m.eod = now - (lt.GetHours() * 3600 + lt.GetMinutes() * 60 + lt.GetSeconds()) + 86400
+        m.eodAt = mn
+        m.dayLbl = {}
+    end if
+    return m.eod
 end function
 
 sub pushByDay(items as Object, rows as Object, skip as Dynamic)
@@ -556,6 +638,27 @@ end function
 
 ' ------------------------------------------------------------ the left list
 function buildRail() as Object
+    stamp = m.ver.ToStr() + "|" + Int(nowEpoch() / 60).ToStr()
+    if m.railStat = invalid or m.railStat.stamp <> stamp then m.railStat = railStats(stamp)
+    rs = m.railStat
+    rail = []
+    rail.Append(rs.head)
+    ' a sport with nothing on today folds under "More sports" (unless it's the one picked)
+    m.moreSports = []
+    for each e in rs.sports
+        if e.n = 0 and e.key <> m.sec then m.moreSports.Push(e) else rail.Push(e)
+    end for
+    if m.moreSports.Count() > 0 then rail.Push({ key: "more", name: "More sports", n: m.moreSports.Count(), live: 0 })
+    rail.Push({ line: true })
+    if m.data <> invalid then
+        rail.Push({ key: "ch", name: "Sports channels", n: m.data.channels.Count(), live: 0 })
+        rail.Push({ key: "ev", name: "Event feeds", n: m.data.groups.Count(), live: 0 })
+    end if
+    return rail
+end function
+
+' the counts down the left: { stamp, head (Live now, Your teams, Coming up), sports (busiest first) }
+function railStats(stamp as String) as Object
     rail = []
     now = nowEpoch()
     nNow = 0
@@ -615,25 +718,15 @@ function buildRail() as Object
         sports.Push(e)
     end for
     sports.SortBy("sk")
-    ' a sport with nothing on today folds under "More sports" (unless it's the one picked)
-    m.moreSports = []
-    for each e in sports
-        if e.n = 0 and e.key <> m.sec then m.moreSports.Push(e) else rail.Push(e)
-    end for
-    if m.moreSports.Count() > 0 then rail.Push({ key: "more", name: "More sports", n: m.moreSports.Count(), live: 0 })
-    rail.Push({ line: true })
-    if m.data <> invalid then
-        rail.Push({ key: "ch", name: "Sports channels", n: m.data.channels.Count(), live: 0 })
-        rail.Push({ key: "ev", name: "Event feeds", n: m.data.groups.Count(), live: 0 })
-    end if
-    return rail
+    return { stamp: stamp, head: rail, sports: sports }
 end function
 
 ' ------------------------------------------------------------ the right side
 ' the biggest thing: the first live game, else (pickNext) the next live broadcast or game, else what's next
 function closeRow(x as Object) as Boolean
-    if isGame(x) or x.event = invalid then return false
-    return isTrue(x.event.close) or isTrue(x.event.ot)
+    ev = rowEv(x)
+    if ev = invalid then return false
+    return isTrue(ev.close) or isTrue(ev.ot)
 end function
 
 function pickHero(rows as Object, pickNext as Boolean) as Dynamic
@@ -847,6 +940,7 @@ end function
 ' ------------------------------------------------------------ drawing
 ' Full refresh: rebuilds the rail, the box and the list. Moving the selection only needs drawRows().
 sub render()
+    m.railPending = false
     m.rail = buildRail()
     m.ri = -1
     for i = 0 to m.rail.Count() - 1
@@ -857,7 +951,8 @@ sub render()
         m.sec = m.rail[0].key
     end if
     m.items = []
-    if m.data <> invalid then m.items = buildItems()
+    m.hero = invalid
+    if m.data <> invalid then m.items = cachedItems()
     if m.hero = invalid then m.heroSel = false
     drawRail()
 
@@ -898,6 +993,21 @@ sub render()
     layoutRows()
     drawRows(true)
 end sub
+
+' buildItems for the picked section, made once per change of the listings and minute (an event group's
+' feeds aren't kept: checking them changes them)
+function cachedItems() as Object
+    if m.sec = "ev" and m.grp <> invalid then return buildItems()
+    stamp = m.ver.ToStr() + "|" + Int(nowEpoch() / 60).ToStr()
+    c = m.itemCache[m.sec]
+    if c <> invalid and c.stamp = stamp then
+        m.hero = c.hero
+        return c.items
+    end if
+    items = buildItems()
+    m.itemCache[m.sec] = { stamp: stamp, items: items, hero: m.hero }
+    return items
+end function
 
 sub drawRail()
     n = m.rail.Count()
@@ -967,7 +1077,7 @@ sub drawHero()
         tagTc = thm("0x111111FF")
     else if live and liveRow(x) and closeRow(x) then
         tagTxt = "CLOSE GAME"
-        if isTrue(x.event.ot) then tagTxt = "OVERTIME"
+        if isTrue(rowEv(x).ot) then tagTxt = "OVERTIME"
         tagCol = thm("0xFF9F1CFF")
         tagTc = thm("0x1A0F00FF")
     else if live and liveRow(x) then
@@ -1207,10 +1317,33 @@ sub railMove(delta as Integer)
         i = (i + delta + n) mod n
         if not m.rail[i].DoesExist("line") then exit for
     end for
-    pickRail(i)
+    e = m.rail[i]
+    if e.DoesExist("line") then return
+    ' the highlight and the heading move at once; the right side fills in when the highlight stops
+    m.ri = i
+    m.sec = e.key
+    m.grp = invalid
+    m.top.groupName = ""
+    m.sel = 0
+    m.top0 = 0
+    m.heroSel = false
+    drawRail()
+    m.secLbl.text = plainText(e.name)
+    m.railPending = true
+    m.railTimer.control = "stop"
+    m.railTimer.control = "start"
+end sub
+
+sub onRailTimer()
+    if m.top.visible then render()
 end sub
 
 sub enterMain()
+    if m.railPending then
+        ' Right straight after moving: the picked sport's list first
+        m.railTimer.control = "stop"
+        render()
+    end if
     if m.hero = invalid and m.items.Count() = 0 then return
     m.zone = "main"
     m.heroSel = (m.hero <> invalid)
@@ -1309,6 +1442,7 @@ sub activate()
         render()
     else if t = "reps" then
         m.showRep = not m.showRep
+        m.ver = m.ver + 1
         render()
     end if
 end sub
