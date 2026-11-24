@@ -381,6 +381,13 @@ sub redraw()
     applyFocus()
 end sub
 
+' a cell's text: "College Football: Texas at Texas A&M" when the guide knows the teams (guide.json?teams=1)
+function progTitle(p as Object) as String
+    teams = anyStr(p.teams)
+    if teams = "" then return p.title
+    return p.title + ": " + teams
+end function
+
 function buildRowCells(ch as Object, ws as Integer, we as Integer) as Object
     cells = []
     t = ws
@@ -391,9 +398,9 @@ function buildRowCells(ch as Object, ws as Integer, we as Integer) as Object
                 s = p.start
                 if s < t then s = t
                 if m.genre <> "" and genreOf(p.cat) <> m.genre then
-                    cells.Push({ start: s, stop: p.stop, title: p.title, prog: p, base: thm("0x1C2B4EFF"), txtColor: thm("0x8FA3C8FF") })
+                    cells.Push({ start: s, stop: p.stop, title: progTitle(p), prog: p, base: thm("0x1C2B4EFF"), txtColor: thm("0x8FA3C8FF") })
                 else
-                    cells.Push({ start: s, stop: p.stop, title: p.title, prog: p, base: catColor(p.cat), txtColor: thm("0xFFFFFFFF") })
+                    cells.Push({ start: s, stop: p.stop, title: progTitle(p), prog: p, base: catColor(p.cat), txtColor: thm("0xFFFFFFFF") })
                 end if
                 if p.stop > t then t = p.stop
             end if

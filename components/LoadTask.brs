@@ -111,10 +111,13 @@ function channelsToRows(channels as Object) as Object
 end function
 
 ' { numStr: [rows] } -> { numStr: [prog] } within the time window
-function guideFromJson(programs as Object, tFrom as Integer, tTo as Integer) as Object
+' `matchups`: guide.json?teams=1's { "<number>": { "<start>": "Texas at Texas A&M" } }, who plays in a game
+' the guide lists as just "College Football". An older TunerBox (or an older saved guide) has none: invalid.
+function guideFromJson(programs as Object, tFrom as Integer, tTo as Integer, matchups as Dynamic) as Object
+    if Type(matchups) <> "roAssociativeArray" then matchups = {}
     out = {}
     for each key in programs.Keys()
-        list = jsonProgs(programs[key], tFrom, tTo)
+        list = jsonProgs(programs[key], tFrom, tTo, matchups[key])
         if list.Count() > 0 then out[key] = list
     end for
     return out
@@ -132,6 +135,19 @@ function progsToRows(byNum as Object) as Object
     return out
 end function
 
+' the "matchups" to save beside progsToRows' rows (a guide from /api/guide), as guide.json?teams=1 sends them
+function teamsOf(byNum as Object) as Object
+    out = {}
+    for each key in byNum.Keys()
+        found = {}
+        for each p in byNum[key]
+            if anyStr(p.teams) <> "" then found[p.start.ToStr()] = p.teams
+        end for
+        if found.Count() > 0 then out[key] = found
+    end for
+    return out
+end function
+
 function readGuideCache() as Object
     txt = readCache("guide")
     if txt = "" then return invalid
@@ -139,9 +155,10 @@ function readGuideCache() as Object
     txt = ""     ' memory: the text goes once parsed, the parsed file once turned into the guide
     if data = invalid or data.programs = invalid then return invalid
     progs = data.programs
+    teams = data.matchups
     data = invalid
     t = nowEpoch()
-    g = guideFromJson(progs, t - 3 * 3600, t + 48 * 3600)
+    g = guideFromJson(progs, t - 3 * 3600, t + 48 * 3600, teams)
     progs = invalid
     if g.Count() = 0 then return invalid
     return g
@@ -1034,7 +1051,7 @@ sub loadGuide()
     m.top.result = result
     ' api/guide and epg.xml: the text to save, made from the guide (guide.json keeps the text it downloaded).
     ' Only when there's no second pass: making it would hold that one up
-    if full and src <> "guide.json" and guide <> invalid and guide.Count() > 0 then m.guideTxt = FormatJson({ programs: progsToRows(guide) })
+    if full and src <> "guide.json" and guide <> invalid and guide.Count() > 0 then m.guideTxt = FormatJson({ programs: progsToRows(guide), matchups: teamsOf(guide) })
     ' the first pass is with the scene now: let this thread's copy go before the second download
     guide = invalid
     result = invalid
@@ -1060,7 +1077,7 @@ sub loadGuide()
             res2 = { ok: true, guide: g2, count: n2, source: src, full: true }
             m.top.result = res2
             res2 = invalid
-            if src = "api/guide" then writeCache("guide", FormatJson({ programs: progsToRows(g2) }))
+            if src = "api/guide" then writeCache("guide", FormatJson({ programs: progsToRows(g2), matchups: teamsOf(g2) }))
             ' the whole guide is saved: the first pass's copy isn't needed
             m.guideTxt = ""
         end if
@@ -1088,9 +1105,11 @@ sub loadGuide()
 end sub
 
 ' /guide.json without descriptions (desc=0: the guide fetches the one it shows); an older TunerBox ignores
-' desc=0 and sends them all, which still works
+' desc=0 and sends them all, which still works. teams=1 (richakev's fork) adds "matchups", the teams of games
+' the guide lists as just "College Football"; a TunerBox that doesn't know it leaves it out, and the guide
+' shows the title alone, as before
 function guideJsonUrl(base as String, hours as Integer) as String
-    return base + "/guide.json?hours=" + hours.ToStr() + "&desc=0"
+    return base + "/guide.json?hours=" + hours.ToStr() + "&desc=0&teams=1"
 end function
 
 ' GET /guide.json for the next `hours` (from 3 hours ago); invalid when it isn't there. Saved for next launch:
@@ -1111,8 +1130,10 @@ function guideJson(base as String, hours as Integer, tFrom as Integer, t0 as Obj
             if keep then m.guideTxt = txt else writeCache("guide", txt)
             txt = ""
             progs = data.programs
+            teams = data.matchups
             data = invalid
-            guide = guideFromJson(progs, tFrom, nowEpoch() + hours * 3600)
+            guide = guideFromJson(progs, tFrom, nowEpoch() + hours * 3600, teams)
+            teams = invalid
             progs = invalid
         end if
         data = invalid
@@ -1185,7 +1206,7 @@ function apiProgs(rows as Dynamic, tFrom as Integer, tTo as Integer) as Object
             st = Int(r.start)
             sp = Int(r.stop)
             if sp > tFrom and st < tTo then
-                list.Push({ start: st, stop: sp, title: anyStr(r.title), subtitle: anyStr(r.subtitle), desc: anyStr(r.descr), cat: anyStr(r.category), ep: anyStr(r.episode), rating: anyStr(r.rating) })
+                list.Push({ start: st, stop: sp, title: anyStr(r.title), subtitle: anyStr(r.subtitle), desc: anyStr(r.descr), cat: anyStr(r.category), ep: anyStr(r.episode), rating: anyStr(r.rating), teams: anyStr(r.matchup) })
             end if
         end if
     end for
@@ -1226,13 +1247,15 @@ function guideFromEpgXml(base as String, tFrom as Integer, tTo as Integer, t0 as
     return out
 end function
 
-function jsonProgs(rows as Object, tFrom as Integer, tTo as Integer) as Object
+' `teams`: that channel's { "<start>": "Texas at Texas A&M" }, or invalid
+function jsonProgs(rows as Object, tFrom as Integer, tTo as Integer, teams as Dynamic) as Object
+    if Type(teams) <> "roAssociativeArray" then teams = {}
     list = []
     for each r in rows
         st = Int(r[0])
         sp = Int(r[1])
         if sp > tFrom and st < tTo then
-            list.Push({ start: st, stop: sp, title: r[2], subtitle: r[3], desc: r[4], cat: r[5], ep: r[6], rating: r[7] })
+            list.Push({ start: st, stop: sp, title: r[2], subtitle: r[3], desc: r[4], cat: r[5], ep: r[6], rating: r[7], teams: anyStr(teams[st.ToStr()]) })
         end if
     end for
     return list

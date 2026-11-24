@@ -139,6 +139,12 @@ end function
 function subLine(p as Object) as String
     s = ""
     if p.ep <> "" then s = p.ep
+    ' the game's teams (guide.json?teams=1), unless the subtitle already says them
+    teams = anyStr(p.teams)
+    if teams <> "" and teams <> anyStr(p.subtitle).Trim() then
+        if s <> "" then s = s + dotSep()
+        s = s + teams
+    end if
     if p.subtitle <> "" then
         if s <> "" then s = s + dotSep()
         s = s + p.subtitle
