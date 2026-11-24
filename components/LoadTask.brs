@@ -1,6 +1,6 @@
 ' Background loader (runs off the UI thread).
 '   mode "boot":  channel list.  cache -> TunerBox /channels.json (older TunerBox: M3U parse)
-'   mode "guide": programme guide. TunerBox /guide.json (older TunerBox: epg.xml parse)
+'   mode "guide": programme guide. TunerBox /guide.json (1.9.0 and older: /api/guide, then epg.xml parse)
 ' Caches live in cachefs:/ so the second launch is nearly instant.
 
 sub init()
@@ -326,7 +326,7 @@ function fetchMany(urls as Object, timeoutMs as Integer) as Object
                 if msg.GetResponseCode() = 200 then
                     out[e.i] = msg.GetString()
                 else
-                    print "[TunerBox] live sports: HTTP " + msg.GetResponseCode().ToStr() + " " + urls[e.i]
+                    print "[TunerBox] HTTP " + msg.GetResponseCode().ToStr() + " " + urls[e.i]
                 end if
                 xfers.Delete(k)
             end if
@@ -651,7 +651,13 @@ sub callApi()
     if m.top.apiMethod = "DELETE" then
         txt = deleteText(url, 15000)
     else if m.top.apiBody <> "" then
-        txt = postText(url, m.top.apiBody, 15000)
+        res = postFull(url, m.top.apiBody, 15000)
+        txt = res.text
+        ' refused (4xx): FastAPI's {"detail": "why"}, for the screen to say
+        if res.code >= 400 then
+            e = ParseJson(res.body)
+            if Type(e) = "roAssociativeArray" and e.detail <> invalid and GetInterface(e.detail, "ifString") <> invalid then result.detail = e.detail
+        end if
     else
         ms = m.top.apiTimeout
         if ms <= 0 then ms = 30000
@@ -741,6 +747,28 @@ function postText(url as String, body as String, timeoutMs as Integer) as String
     return ""
 end function
 
+' POST a JSON body: { code, text (the reply when it's 2xx, else ""), body (the reply whatever the code) }
+function postFull(url as String, body as String, timeoutMs as Integer) as Object
+    out = { code: 0, text: "", body: "" }
+    xfer = CreateObject("roUrlTransfer")
+    port = CreateObject("roMessagePort")
+    xfer.SetPort(port)
+    xfer.SetUrl(url)
+    xfer.RetainBodyOnError(true)
+    xfer.AddHeader("Content-Type", "application/json")
+    if xfer.AsyncPostFromString(body) then
+        msg = Wait(timeoutMs, port)
+        if Type(msg) = "roUrlEvent" then
+            out.code = msg.GetResponseCode()
+            out.body = msg.GetString()
+            if out.code >= 200 and out.code < 300 then out.text = out.body
+        else
+            xfer.AsyncCancel()
+        end if
+    end if
+    return out
+end function
+
 function deleteText(url as String, timeoutMs as Integer) as String
     xfer = CreateObject("roUrlTransfer")
     port = CreateObject("roMessagePort")
@@ -828,7 +856,7 @@ sub sendBoot(result as Object)
 end sub
 
 ' ============================================================ guide
-' Two passes, so the guide opens quickly but still reaches well ahead: the first asks for guideHours (12)
+' Two passes, so the guide opens quickly but still reaches well ahead: the first asks for guideHours (3)
 ' and hands it over; the second asks for guideMore (24) and hands that over too, replacing the first.
 ' result.full is true on the answer that has everything (the scene only then counts the cache as fresh).
 sub loadGuide()
@@ -842,15 +870,31 @@ sub loadGuide()
 
     ' TunerBox's guide for the Roku (GET /guide.json, gzipped): only the hours shown and the channels with
     ' listings, read with the built-in JSON parser. An older TunerBox doesn't have it: epg.xml below.
+    ' TunerBox 1.9.0 and older have no /guide.json: their web guide's /api/guide (JSON, only the hours asked
+    ' for) instead, a few channels per request. epg.xml (three days of every channel, parsed here) is the last
+    ' resort: on a big lineup it can take minutes or run the Roku out of memory.
+    ' Both passes' downloads start together: the second (bigger) one comes in while the first is parsed and
+    ' handed over, instead of only starting after it.
+    ' The saved copy for next launch is written once a pass is handed over, so it doesn't hold the guide up;
+    ' with a second pass coming, the first is only kept (m.guideTxt) to be saved if that one doesn't come.
     m.top.status = "Downloading guide..."
-    guide = guideJson(base, hours, tFrom, t0)
+    twoPass = (more > hours)
+    m.guideTxt = ""
+    f2 = invalid
+    if twoPass then f2 = startFetch(guideJsonUrl(base, more))
+    guide = guideJson(base, hours, tFrom, t0, invalid, twoPass)
     if guide <> invalid then
         result.source = "guide.json"
     else
-        guide = guideFromEpgXml(base, tFrom, now + hours * 3600, t0)
-        result.source = "epg.xml"
-        if guide <> invalid and guide.Count() > 0 then
-            writeCache("guide", FormatJson({ programs: progsToRows(guide) }))
+        ' no /guide.json here: the second pass's download is no use either
+        if f2 <> invalid then f2.x.AsyncCancel()
+        f2 = invalid
+        guide = guideFromApi(base, tFrom, now + hours * 3600, t0)
+        if guide <> invalid then
+            result.source = "api/guide"
+        else
+            guide = guideFromEpgXml(base, tFrom, now + hours * 3600, t0)
+            result.source = "epg.xml"
         end if
     end if
 
@@ -860,27 +904,50 @@ sub loadGuide()
         result.ok = true
     end if
     ' epg.xml (an older TunerBox) is downloaded whole each time: no second pass for that
-    result.full = (not result.ok or result.source <> "guide.json" or more <= hours)
+    result.full = (not result.ok or result.source = "epg.xml" or more <= hours)
+    src = result.source
     print "[TunerBox] guide ready (" + result.source + ", " + hours.ToStr() + " h): " + result.count.ToStr() + " channels, " + t0.TotalMilliseconds().ToStr() + " ms"
     full = result.full
+    ' no second pass after all (e.g. no listings): stop its download
+    if full and f2 <> invalid then f2.x.AsyncCancel()
+    if full then f2 = invalid
     m.top.result = result
+    ' api/guide and epg.xml: the text to save, made from the guide (guide.json keeps the text it downloaded).
+    ' Only when there's no second pass: making it would hold that one up
+    if full and src <> "guide.json" and guide <> invalid and guide.Count() > 0 then m.guideTxt = FormatJson({ programs: progsToRows(guide) })
     ' the first pass is with the scene now: let this thread's copy go before the second download
     guide = invalid
     result = invalid
+    if full then
+        if m.guideTxt <> "" then writeCache("guide", m.guideTxt)
+        m.guideTxt = ""
+    end if
 
     ' ---- the second pass: the hours after those, while the guide is already usable
     if not full then
         t1 = CreateObject("roTimespan")
-        g2 = guideJson(base, more, tFrom, t1)
+        if src = "api/guide" then
+            g2 = guideFromApi(base, tFrom, nowEpoch() + more * 3600, t1)
+        else
+            ' already downloading since the first pass started (or done by now); saved as it's read (the
+            ' guide on screen meanwhile is the first pass, so this doesn't hold anything up)
+            g2 = guideJson(base, more, tFrom, t1, f2, false)
+            f2 = invalid
+        end if
         if g2 <> invalid and g2.Count() > 0 then
             n2 = g2.Count()
-            print "[TunerBox] guide extended (" + more.ToStr() + " h): " + n2.ToStr() + " channels, " + t1.TotalMilliseconds().ToStr() + " ms"
-            res2 = { ok: true, guide: g2, count: n2, source: "guide.json", full: true }
-            g2 = invalid
+            print "[TunerBox] guide extended (" + src + ", " + more.ToStr() + " h): " + n2.ToStr() + " channels, " + t1.TotalMilliseconds().ToStr() + " ms"
+            res2 = { ok: true, guide: g2, count: n2, source: src, full: true }
             m.top.result = res2
             res2 = invalid
+            if src = "api/guide" then writeCache("guide", FormatJson({ programs: progsToRows(g2) }))
+            ' the whole guide is saved: the first pass's copy isn't needed
+            m.guideTxt = ""
         end if
         g2 = invalid
+        ' the second pass didn't come: save the first, so next launch has something to show
+        if m.guideTxt <> "" then writeCache("guide", m.guideTxt)
+        m.guideTxt = ""
     end if
 
     ' ---- afterwards (result already delivered): refresh the channel cache for next launch
@@ -900,10 +967,20 @@ sub loadGuide()
     end if
 end sub
 
-' GET /guide.json for the next `hours` (from 3 hours ago), cached for next launch; invalid when it isn't there
-function guideJson(base as String, hours as Integer, tFrom as Integer, t0 as Object) as Dynamic
+' /guide.json without descriptions (desc=0: the guide fetches the one it shows); an older TunerBox ignores
+' desc=0 and sends them all, which still works
+function guideJsonUrl(base as String, hours as Integer) as String
+    return base + "/guide.json?hours=" + hours.ToStr() + "&desc=0"
+end function
+
+' GET /guide.json for the next `hours` (from 3 hours ago); invalid when it isn't there. Saved for next launch:
+' now, or with `keep` held in m.guideTxt for the caller to save once it's handed over.
+' `pre`: that download already started with startFetch (invalid: start it now)
+function guideJson(base as String, hours as Integer, tFrom as Integer, t0 as Object, pre as Dynamic, keep as Boolean) as Dynamic
     guide = invalid
-    txt = fetchText(base + "/guide.json?hours=" + hours.ToStr(), 60000)
+    if pre = invalid then pre = startFetch(guideJsonUrl(base, hours))
+    txt = finishFetch(pre, 60000)
+    pre = invalid
     tDl = t0.TotalMilliseconds()
     chars = Len(txt)
     if txt <> "" then
@@ -911,7 +988,7 @@ function guideJson(base as String, hours as Integer, tFrom as Integer, t0 as Obj
         ' (the text once parsed, the parsed reply once turned into the guide)
         data = ParseJson(txt)
         if data <> invalid and Type(data.programs) = "roAssociativeArray" then
-            writeCache("guide", txt)
+            if keep then m.guideTxt = txt else writeCache("guide", txt)
             txt = ""
             progs = data.programs
             data = invalid
@@ -925,7 +1002,77 @@ function guideJson(base as String, hours as Integer, tFrom as Integer, t0 as Obj
     return guide
 end function
 
-' fallback: download + parse epg.xml here.  returns { numStr: [prog] }
+' fallback for TunerBox 1.9.0 and older (no /guide.json): GET /api/guide?start=&stop=&numbers=, the endpoint
+' their web guide uses, for a batch of channels at a time (a few in parallel) so no reply is too big to parse.
+' Its rows are objects ({ start, stop, title, subtitle, descr, category, episode, rating, ... }), keyed by
+' channel number. Returns { numStr: [prog] }; invalid when the server has no /api/guide either.
+function guideFromApi(base as String, tFrom as Integer, tTo as Integer, t0 as Object) as Dynamic
+    nums = []
+    whole = CreateObject("roRegex", "^\d+$", "")
+    for each k in m.top.chanKeys
+        ' /api/guide only takes whole channel numbers
+        if whole.IsMatch(k.n) then nums.Push(k.n)
+    end for
+    if nums.Count() = 0 then return invalid
+    batch = 60
+    parallel = 4
+    urls = []
+    for i = 0 to nums.Count() - 1 step batch
+        last = i + batch - 1
+        if last > nums.Count() - 1 then last = nums.Count() - 1
+        part = []
+        for j = i to last
+            part.Push(nums[j])
+        end for
+        urls.Push(base + "/api/guide?start=" + tFrom.ToStr() + "&stop=" + tTo.ToStr() + "&numbers=" + part.Join(","))
+    end for
+    out = {}
+    answered = 0
+    for i = 0 to urls.Count() - 1 step parallel
+        group = []
+        for j = i to i + parallel - 1
+            if j < urls.Count() then group.Push(urls[j])
+        end for
+        m.top.status = "Downloading guide (" + (i + group.Count()).ToStr() + "/" + urls.Count().ToStr() + ")..."
+        bodies = fetchMany(group, 30000)
+        for each txt in bodies
+            if txt <> "" then
+                data = ParseJson(txt)
+                txt = ""
+                if data <> invalid and Type(data) = "roAssociativeArray" then
+                    answered = answered + 1
+                    for each key in data.Keys()
+                        list = apiProgs(data[key], tFrom, tTo)
+                        if list.Count() > 0 then out[key] = list
+                    end for
+                end if
+                data = invalid
+            end if
+        end for
+        bodies = invalid
+        ' the first batch got nothing usable: this TunerBox has no /api/guide, don't try the rest
+        if answered = 0 then return invalid
+    end for
+    print "[TunerBox] api/guide: " + out.Count().ToStr() + " channels from " + urls.Count().ToStr() + " requests in " + t0.TotalMilliseconds().ToStr() + " ms"
+    return out
+end function
+
+function apiProgs(rows as Dynamic, tFrom as Integer, tTo as Integer) as Object
+    list = []
+    if Type(rows) <> "roArray" then return list
+    for each r in rows
+        if Type(r) = "roAssociativeArray" and r.start <> invalid and r.stop <> invalid then
+            st = Int(r.start)
+            sp = Int(r.stop)
+            if sp > tFrom and st < tTo then
+                list.Push({ start: st, stop: sp, title: anyStr(r.title), subtitle: anyStr(r.subtitle), desc: anyStr(r.descr), cat: anyStr(r.category), ep: anyStr(r.episode), rating: anyStr(r.rating) })
+            end if
+        end if
+    end for
+    return list
+end function
+
+' last resort: download + parse epg.xml here.  returns { numStr: [prog] }
 function guideFromEpgXml(base as String, tFrom as Integer, tTo as Integer, t0 as Object) as Object
     keys = m.top.chanKeys
     m.top.status = "Downloading guide (epg.xml)..."
@@ -1115,6 +1262,12 @@ function hostOnly(base as String) as String
 end function
 
 function fetchText(url as String, timeoutMs as Integer) as String
+    return finishFetch(startFetch(url), timeoutMs)
+end function
+
+' start a GET in the background (the download runs while this thread does other work); finishFetch waits
+' for it. Returns { x, port }, or invalid when it couldn't start.
+function startFetch(url as String) as Dynamic
     xfer = CreateObject("roUrlTransfer")
     port = CreateObject("roMessagePort")
     xfer.SetPort(port)
@@ -1123,13 +1276,18 @@ function fetchText(url as String, timeoutMs as Integer) as String
     if LCase(Left(url, 6)) = "https:" then
         xfer.SetCertificatesFile("common:/certs/ca-bundle.crt")
     end if
-    if xfer.AsyncGetToString() then
-        msg = Wait(timeoutMs, port)
-        if Type(msg) = "roUrlEvent" then
-            if msg.GetResponseCode() = 200 then return msg.GetString()
-        else
-            xfer.AsyncCancel()
-        end if
+    if not xfer.AsyncGetToString() then return invalid
+    return { x: xfer, port: port }
+end function
+
+' the body of a startFetch download ("" on failure, or when it isn't done within timeoutMs from now)
+function finishFetch(f as Dynamic, timeoutMs as Integer) as String
+    if f = invalid then return ""
+    msg = Wait(timeoutMs, f.port)
+    if Type(msg) = "roUrlEvent" then
+        if msg.GetResponseCode() = 200 then return msg.GetString()
+    else
+        f.x.AsyncCancel()
     end if
     return ""
 end function
