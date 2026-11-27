@@ -76,6 +76,8 @@ sub init()
     m.sportsGroupName = ""
     m.gameReq = invalid
     m.menuPage = "main"
+    m.feedsFrom = "main"     ' which page opened Switch feed (its Back goes there)
+    m.settingsFrom = "main"  ' and Settings
     m.recReq = invalid
     m.srReq = invalid
     m.quick = false
@@ -111,6 +113,24 @@ sub init()
     m.favRetryTimer = CreateObject("roSGNode", "Timer")
     m.favRetryTimer.repeat = false
     m.favRetryTimer.observeField("fire", "onFavRetry")
+    ' the show in On Demand (odProgAsk): answers by "<channel>-<start>", the bar's button, and the guide's
+    ' OK dialog waiting a moment for its answer
+    m.odProg = {}
+    m.odProgOff = 0
+    m.odHud = invalid
+    m.odHudAsking = ""
+    m.odPick = invalid
+    m.optWait = invalid
+    m.optOd = invalid
+    m.optWaitTimer = CreateObject("roSGNode", "Timer")
+    m.optWaitTimer.repeat = false
+    m.optWaitTimer.duration = 1.2
+    m.optWaitTimer.observeField("fire", "onOptWait")
+    ' the bar's button asks a moment after tuning (as places), so channel surfing doesn't ask for every channel
+    m.odHudTimer = CreateObject("roSGNode", "Timer")
+    m.odHudTimer.repeat = false
+    m.odHudTimer.duration = 2.5
+    m.odHudTimer.observeField("fire", "onOdHudTimer")
     ' the other channels and event feeds showing the game that's on (TunerBox /api/sports/places), asked a
     ' moment after tuning so channel surfing doesn't ask; m.places = { key: placesKey(), game } (game may be invalid)
     m.places = invalid
@@ -207,6 +227,8 @@ end sub
 
 sub loadAll()
     m.base = normalizeBase(regRead("host", ""))
+    m.odProg = {}           ' another (or a newer) TunerBox: the show-in-On-Demand answers again
+    m.odProgOff = 0
     m.mode = "boot"
     m.guideDelay.control = "stop"
     if not m.quick then
@@ -1024,6 +1046,7 @@ sub showBanner()
     end if
     if m.curIdx < 0 then return
     updateHudFav()
+    odHudSync(false)        ' the bar's Watch On Demand button, when the show on now is in On Demand
     m.hud.callFunc("showBanner", bannerInfo(m.channels[m.curIdx]))
 end sub
 
@@ -1077,6 +1100,7 @@ function onKeyEvent(key as String, press as Boolean) as Boolean
     else if key = "down" then
         changeChannel(-1)
     else if key = "OK" then
+        odHudSync(true)
         m.hud.callFunc("showBar", bannerInfo(m.channels[m.curIdx]))
     else if key = "left" then
         showBanner()
@@ -1152,6 +1176,8 @@ end sub
 sub hudAction(id as String)
     if id = "more" then
         showMore()
+    else if id = "odprog" then
+        showOdChoices()
     else if id = "startover" then
         m.hud.callFunc("hideAll")
         if m.curIdx >= 0 and m.extern = invalid then
@@ -1199,42 +1225,56 @@ sub hudAction(id as String)
     end if
 end sub
 
-' More on the bar (as the web TV's More pop-up): what used to have its own button
+' More on the bar: the same tile menu as * (Options), so it works on TVs where the system takes * during
+' video (Roku TVs open their own picture settings). Multiview and Switch feed first, then this show and channel.
 sub showMore()
     m.hud.callFunc("hideAll")
-    buttons = []
-    actions = []
-    if m.extern = invalid and m.curIdx >= 0 then
-        if m.hud.isFav then buttons.Push("Remove from favorites") else buttons.Push("Add to favorites")
-        actions.Push("fav")
-    end if
-    buttons.Push("Favorites")
-    actions.Push("favs")
-    buttons.Push("Last channel")
-    actions.Push("last")
+    m.menuPage = "more"
+    m.menu.heading = "More"
+    m.menu.items = moreItems()
     if m.extern = invalid and m.curIdx >= 0 then
         ch = m.channels[m.curIdx]
-        if cuAvailable(ch.numStr, progAt(ch, nowEpoch())) then
-            buttons.Push("Start this show over")
-            actions.Push("startover")
-        end if
+        m.menu.subtitle = ch.numStr + " " + ch.name
+    else
+        m.menu.subtitle = ""
     end if
-    if m.extern = invalid and m.curIdx >= 0 and m.dvrOn then
-        buttons.Push("Record this show")
-        actions.Push("record")
-    end if
-    if m.hud.muted then buttons.Push("Unmute") else buttons.Push("Mute")
-    actions.Push("mute")
-    buttons.Push("Show info")
-    actions.Push("info")
-    buttons.Push("Game stats & live scores")
-    actions.Push("stats")
-    buttons.Push("Menu")
-    actions.Push("menu")
-    buttons.Push("Close")
-    actions.Push("close")
-    showDialog("more", "More", [], buttons, actions)
+    m.menu.callFunc("openMenu")
 end sub
+
+' at most 14 tiles (7 rows): the menu doesn't scroll
+function moreItems() as Object
+    items = []
+    if m.mv <> invalid then
+        items.Push({ id: "mv", label: "Multiview", value: "ON" })
+    else if mvMaxPics() >= 2 and mvMainTile() <> invalid then
+        items.Push({ id: "mv", label: "Multiview", value: "up to " + mvMaxPics().ToStr() })
+    end if
+    if canSwitchFeed() then
+        v = ""
+        if m.extern = invalid and chAlts(m.playIdx) > 0 then v = (m.alt + 1).ToStr() + " of " + (chAlts(m.playIdx) + 1).ToStr()
+        items.Push({ id: "feeds", label: "Switch feed", value: v })
+    end if
+    onCh = (m.extern = invalid and m.curIdx >= 0)
+    if onCh then
+        if m.hud.isFav then items.Push({ id: "fav", label: "Remove from favorites" }) else items.Push({ id: "fav", label: "Add to favorites" })
+    end if
+    items.Push({ id: "last", label: "Last channel" })
+    if onCh then
+        ch = m.channels[m.curIdx]
+        if cuAvailable(ch.numStr, progAt(ch, nowEpoch())) then items.Push({ id: "startover", label: "Start this show over" })
+        if m.odHud <> invalid then items.Push({ id: "odprog", label: "Watch On Demand" })
+        if m.dvrOn then items.Push({ id: "record", label: "Record this show" })
+    end if
+    if m.hud.muted then items.Push({ id: "mute", label: "Unmute" }) else items.Push({ id: "mute", label: "Mute" })
+    items.Append([
+        { id: "favs", label: "Favorites" },
+        { id: "stats", label: "Game stats & live scores" },
+        { id: "info", label: "Show info" },
+        { id: "settings", label: "Settings" },
+        { id: "close", label: "Close" }
+    ])
+    return items
+end function
 
 ' ============================================================ guide
 sub openGuide(startIdx as Integer, view as Object, title as String)
@@ -1301,24 +1341,56 @@ sub onGuideOptions()
         return
     end if
     ch = m.channels[req.chIdx]
+    ' the show in On Demand: its answer first (asked now unless it's known), so the buttons come up together
+    m.optWait = invalid
+    m.optWaitTimer.control = "stop"
+    if req.prog <> invalid and odProgCan(ch.numStr, req.prog) and odProgCached(ch.numStr, req.prog) = invalid then
+        m.optWait = { req: req, key: odProgKey(ch.numStr, req.prog) }
+        odProgAsk(ch.numStr, req.prog, "opts")
+        m.optWaitTimer.control = "start"
+        return
+    end if
+    showGuideOpts(req)
+end sub
+
+sub showGuideOpts(req as Object)
+    ch = m.channels[req.chIdx]
     title = ch.name
     msg = [ch.numStr + " " + ch.name]
     buttons = ["Watch channel"]
     actions = ["watch"]
+    m.optOd = invalid
     if req.prog <> invalid then
         p = req.prog
         t = nowEpoch()
         title = p.title
         msg = [fmtDay(p.start) + "  " + fmtClock(p.start) + dashSep() + fmtClock(p.stop), ch.numStr + " " + ch.name]
         ended = (p.stop <= t)
+        od = invalid
+        if odProgCan(ch.numStr, p) then
+            c = odProgCached(ch.numStr, p)
+            if c <> invalid and c.m <> invalid then od = { mt: c.m, choices: odChoices(c.m, p) }
+        end if
         if cuAvailable(ch.numStr, p) then
             ' from the channel's archive, in the On Demand player
             if ended then buttons.Unshift("Watch (catch-up)") else buttons.Push("Start over (from the beginning)")
             if ended then actions.Unshift("catchup") else actions.Push("catchup")
         else if ended then
             gone = "This show has ended"
-            if cuDaysOf(ch.numStr) > 0 then gone = gone + " and is no longer in the channel's archive"
+            if od <> invalid and od.mt.show = invalid then
+                gone = gone + ", but it's in On Demand"
+            else if cuDaysOf(ch.numStr) > 0 then
+                gone = gone + " and is no longer in the channel's archive"
+            end if
             msg.Push(gone)
+        end if
+        ' the same movie or episode in On Demand: under Watch / Start over
+        if od <> invalid then
+            m.optOd = od
+            for i = 0 to od.choices.Count() - 1
+                buttons.Push(odChoiceLabel(od.choices[i], od.mt, false))
+                actions.Push("od" + i.ToStr())
+            end for
         end if
         if m.dvrOn and not ended then
             buttons.Push("Record")
@@ -2153,9 +2225,7 @@ sub onDlgButton()
     if kind = "host" or kind = "jump" or kind = "vodsearch" then txt = dlg.text
     dlg.close = true
 
-    if kind = "more" then
-        if action <> "close" then hudAction(action)
-    else if kind = "host" then
+    if kind = "host" then
         if action = "ok" and txt.Trim() <> "" then
             regWrite("host", txt.Trim())
             regWrite("lastUrl", "")
@@ -2181,7 +2251,14 @@ sub onDlgButton()
             dvrRecord(m.optReq.chIdx, m.optReq.prog)
         else if action = "jump" then
             promptJump()
+        else if Left(action, 2) = "od" and m.optOd <> invalid then
+            odPickAct(m.optOd, Int(Val(Mid(action, 3))))
         end if
+        m.optOd = invalid
+    else if kind = "odprog" then
+        od = m.odPick
+        m.odPick = invalid
+        if od <> invalid and Left(action, 2) = "od" then odPickAct(od, Int(Val(Mid(action, 3))))
     else if kind = "srec" then
         if m.srReq <> invalid then
             if action = "record" then
@@ -2457,9 +2534,14 @@ function settingsItems() as Object
         { id: "server", label: "Change server address" },
         { id: "stats", label: "Stream stats" },
         { id: "about", label: "About" },
-        { id: "setback", label: "Back to menu" }
+        { id: "setback", label: settingsBackLabel() }
     ])
     return items
+end function
+
+function settingsBackLabel() as String
+    if m.settingsFrom = "more" then return "Back to More"
+    return "Back to menu"
 end function
 
 sub showSettings()
@@ -2655,7 +2737,7 @@ sub swfDone()
     end if
     items = feedItems(own, m.alt)
     items.Append(placeItems(m.placeOpts))
-    items.Push({ id: "fdback", label: "Back to menu" })
+    if m.feedsFrom = "more" then items.Push({ id: "fdback", label: "Back to More" }) else items.Push({ id: "fdback", label: "Back to menu" })
     what = "this game"
     if m.places <> invalid and m.places.game <> invalid and anyStr(m.places.game.name) <> "" then what = anyStr(m.places.game.name)
     if own.Count() > 0 and others > 0 then
@@ -2869,11 +2951,25 @@ sub onMenuClose()
         showSettings()
         return
     end if
-    if m.menuPage = "settings" or m.menuPage = "feeds" then
-        showMenu()
+    if m.menuPage = "feeds" then
+        feedsBack()
+        return
+    end if
+    if m.menuPage = "settings" then
+        settingsBack()
         return
     end if
     closeMenuView()
+end sub
+
+' Settings' Back: to More or the menu, whichever opened it
+sub settingsBack()
+    if m.settingsFrom = "more" then showMore() else showMenu()
+end sub
+
+' Switch feed's Back: to More or the menu, whichever opened it
+sub feedsBack()
+    if m.feedsFrom = "more" then showMore() else showMenu()
 end sub
 
 sub onMenuSelected()
@@ -2924,7 +3020,26 @@ sub onMenuSelected()
                 end if
             end if
         else if id = "fdback" then
-            showMenu()
+            feedsBack()
+        end if
+        return
+    end if
+    if m.menuPage = "more" then
+        if id = "feeds" then
+            m.feedsFrom = "more"
+            closeMenuView()
+            showFeeds()
+        else if id = "settings" then
+            m.settingsFrom = "more"
+            showSettings()
+        else if id = "close" then
+            closeMenuView()
+        else if id = "mv" then
+            closeMenuView()
+            runMenuAction("mv")
+        else
+            closeMenuView()
+            hudAction(id)
         end if
         return
     end if
@@ -2951,7 +3066,7 @@ sub onMenuSelected()
             runMenuAction(id)
             m.menu.items = settingsItems()
         else if id = "setback" then
-            showMenu()
+            settingsBack()
         else
             closeMenuView()
             runMenuAction(id)
@@ -2959,9 +3074,11 @@ sub onMenuSelected()
         return
     end if
     if id = "feeds" then
+        m.feedsFrom = "main"
         closeMenuView()
         showFeeds()
     else if id = "settings" then
+        m.settingsFrom = "main"
         showSettings()
     else if id = "close" then
         closeMenuView()
@@ -3180,6 +3297,9 @@ sub onVodApi(event as Object)
         return
     else if r.tag = "vodsubs" then
         gotSubs(r)
+        return
+    else if r.tag = "odprog" then
+        gotOdProg(r)
         return
     end if
     if r.tag <> "vodplay" then return
@@ -3520,6 +3640,209 @@ sub playCatchup(num as String, p as Dynamic)
     end if
     st = epochOf(p.start)
     playVod("cu-" + num + "-" + st.ToStr(), 0, false)
+end sub
+
+' ============================================================ the show in On Demand
+' A movie or episode on a channel that's also in On Demand: watch it there from the beginning, carry on from
+' about where the broadcast is, or resume where you stopped (as the web TV). TunerBox looks it up:
+' GET /api/vod/for-program/<channel>/<start> -> { match: invalid | { show } | { id, kind, title, sub,
+' duration, position }, slot }. Only richakev's fork has it: pasiegel's TunerBox (v1.9.2 and older, main)
+' answers 404, so there are no On Demand choices, and it isn't asked again for 10 minutes.
+function odProgKey(num as String, p as Object) as String
+    return num + "-" + epochOf(p.start).ToStr()
+end function
+
+' can this channel's show be looked up? (whole channel numbers only: the endpoint takes an int)
+function odProgCan(num as String, p as Dynamic) as Boolean
+    if not m.vodOn or p = invalid or anyStr(p.title) = "" or num = "" then return false
+    if m.odProgOff > 0 and nowEpoch() - m.odProgOff < 600 then return false
+    r = CreateObject("roRegex", "^[0-9]+$", "")
+    return r.IsMatch(num)
+end function
+
+' the answer as last heard (5 minutes): { m: match or invalid }, or invalid when it has to be asked
+function odProgCached(num as String, p as Object) as Dynamic
+    c = m.odProg[odProgKey(num, p)]
+    if c <> invalid and nowEpoch() - c.t < 300 then return c
+    return invalid
+end function
+
+sub odProgAsk(num as String, p as Object, why as String)
+    key = odProgKey(num, p)
+    if m.odProg.Count() > 200 then m.odProg = {}
+    vodApi("odprog", "/api/vod/for-program/" + num + "/" + epochOf(p.start).ToStr(), invalid, { key: key, why: why })
+end sub
+
+sub gotOdProg(r as Object)
+    ctx = r.ctx
+    mt = invalid
+    if r.ok and Type(r.data) = "roAssociativeArray" then
+        if Type(r.data.match) = "roAssociativeArray" then mt = r.data.match
+        m.odProgOff = 0                 ' it answers: an earlier miss was only a hiccup
+    else
+        m.odProgOff = nowEpoch()        ' an older TunerBox without it (or it didn't answer)
+    end if
+    m.odProg[ctx.key] = { t: nowEpoch(), m: mt }
+    if ctx.why = "opts" then
+        if m.optWait <> invalid and m.optWait.key = ctx.key then optWaitDone()
+    else if ctx.why = "hud" then
+        if m.odHudAsking = ctx.key then m.odHudAsking = ""
+        odHudSync(false)
+    end if
+end sub
+
+' how far into the On Demand copy the broadcast is now: the time since it started, less the adverts' share
+' (a 42-minute episode in an hour's slot is 30 minutes in after 43 minutes on the air)
+function odSpot(mt as Object, p as Object) as Float
+    n = nowEpoch()
+    st = epochOf(p.start)
+    sp = epochOf(p.stop)
+    if n < st or n >= sp then return 0
+    slot = sp - st
+    if slot < 1 then slot = 1
+    dur = numv(mt.duration)
+    at = (n - st) * 1.0
+    if dur > 0 and slot > dur then at = at * dur / slot
+    if dur > 0 and at > dur - 60 then at = dur - 60
+    if at < 0 then at = 0
+    return at
+end function
+
+' what can be done with it: [{ id: show | start | here | resume, at }] ([] when it isn't in On Demand)
+function odChoices(mt as Dynamic, p as Object) as Object
+    out = []
+    if mt = invalid then return out
+    if mt.show <> invalid then
+        out.Push({ id: "show", at: 0 })
+        return out
+    end if
+    if anyStr(mt.id) = "" then return out
+    at = odSpot(mt, p)
+    out.Push({ id: "start", at: 0 })
+    if at > 60 then out.Push({ id: "here", at: at })
+    ps = numv(mt.position)
+    if ps > 30 and Abs(ps - at) > 120 then out.Push({ id: "resume", at: ps })
+    return out
+end function
+
+' the guide dialog's wording (long), or the player bar's (short)
+function odChoiceLabel(c as Object, mt as Object, short as Boolean) as String
+    if short then
+        if c.id = "show" then return "Find this show"
+        if c.id = "start" then return "Start from the beginning"
+        if c.id = "here" then return "Continue" + dotSep() + fmtDur(c.at) + " in"
+        return "Resume" + dotSep() + fmtDur(c.at)
+    end if
+    if c.id = "show" then return "Find this show in On Demand"
+    if c.id = "start" then
+        what = "this movie"
+        if anyStr(mt.kind) = "episode" then
+            ep = anyStr(mt["sub"]).Split(" " + Chr(183) + " ")[0]
+            what = "this episode"
+            if ep <> invalid and ep <> "" then what = what + " (" + ep + ")"
+        end if
+        return "Watch " + what + " On Demand from the beginning"
+    end if
+    if c.id = "here" then return "Continue On Demand from here (about " + fmtDur(c.at) + " in)"
+    return "Resume On Demand where you stopped (" + fmtDur(c.at) + ")"
+end function
+
+function odWhat(mt as Object) as String
+    if mt.show <> invalid then return "This show is in On Demand"
+    if anyStr(mt.kind) = "episode" then return "This episode is in On Demand"
+    return "This movie is in On Demand"
+end function
+
+' a choice picked: On Demand's page for the show, or play it (Back / Stop: back to the channel)
+sub odPickAct(od as Object, i as Integer)
+    if i >= 0 and i < od.choices.Count() then odAct(od.choices[i], od.mt)
+end sub
+
+sub odAct(c as Object, mt as Object)
+    if c.id = "show" then
+        openOnDemand({ showId: anyStr(mt.show) })
+    else
+        playVod(anyStr(mt.id), c.at, false)
+    end if
+end sub
+
+' ------------------------------------------------------------ on the player bar, and under More
+' A "Watch On Demand" button before More, only while the show on now is in On Demand; it opens its choices.
+' showBanner and OK (the bar) call odHudSync. askNow: OK asks straight away; the banner (tuning) asks after
+' m.odHudTimer, each tune restarting it, so surfing past a channel never asks.
+sub onOdHudTimer()
+    odHudSync(true)
+end sub
+
+sub odHudSync(askNow as Boolean)
+    ch = invalid
+    p = invalid
+    if m.mode = "live" and m.extern = invalid and m.mv = invalid and m.curIdx >= 0 and m.curIdx < m.channels.Count() then
+        ch = m.channels[m.curIdx]
+        p = progAt(ch, nowEpoch())
+    end if
+    if ch = invalid or not odProgCan(ch.numStr, p) then
+        odHudSet(invalid, invalid, invalid)
+        return
+    end if
+    key = odProgKey(ch.numStr, p)
+    c = odProgCached(ch.numStr, p)
+    if c <> invalid then
+        odHudSet(key, c.m, p)
+        return
+    end if
+    if m.odHud = invalid or m.odHud.key <> key then odHudSet(invalid, invalid, invalid)
+    if m.odHudAsking <> key then
+        if not askNow then
+            m.odHudTimer.control = "stop"
+            m.odHudTimer.control = "start"
+            return
+        end if
+        m.odHudTimer.control = "stop"
+        m.odHudAsking = key         ' one question per show (the bar opens many times)
+        odProgAsk(ch.numStr, p, "hud")
+    end if
+end sub
+
+sub odHudSet(key as Dynamic, mt as Dynamic, p as Dynamic)
+    shown = (mt <> invalid and odChoices(mt, p).Count() > 0)
+    if shown then m.odHud = { key: key, mt: mt, p: p } else m.odHud = invalid
+    if m.hud.odButton <> shown then m.hud.odButton = shown
+end sub
+
+' the bar's button (or More's entry): its choices, worked out as of now ("Continue · 30:06 in")
+sub showOdChoices()
+    m.hud.callFunc("hideAll")
+    h = m.odHud
+    if h = invalid then return
+    m.odPick = { mt: h.mt, choices: odChoices(h.mt, h.p) }
+    buttons = []
+    actions = []
+    for i = 0 to m.odPick.choices.Count() - 1
+        buttons.Push(odChoiceLabel(m.odPick.choices[i], h.mt, true))
+        actions.Push("od" + i.ToStr())
+    end for
+    buttons.Push("Cancel")
+    actions.Push("cancel")
+    msg = [anyStr(h.p.title)]
+    sl = subLine(h.p)
+    if sl <> "" then msg.Push(sl)
+    showDialog("odprog", odWhat(h.mt), msg, buttons, actions)
+end sub
+
+' ------------------------------------------------------------ in the guide's OK dialog
+' The answer is waited for (up to 1.2s) before the dialog opens, so its buttons don't move under the
+' highlight; one that comes later is kept for the next time.
+sub onOptWait()
+    optWaitDone()
+end sub
+
+sub optWaitDone()
+    w = m.optWait
+    m.optWait = invalid
+    m.optWaitTimer.control = "stop"
+    if w = invalid or m.mode <> "guide" or m.dlg <> invalid then return
+    showGuideOpts(w.req)
 end sub
 
 ' the guide went back before the listings it has: load the catch-up channels' shows from there (a few hours

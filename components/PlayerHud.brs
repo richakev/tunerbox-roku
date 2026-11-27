@@ -51,11 +51,28 @@ sub onShowHome()
     buildBar()
 end sub
 
+' Watch On Demand came or went: the bar again, the highlight staying on the same button (Guide when it was
+' this one)
+sub onOdButton()
+    was = m.ids[m.focusIdx]
+    buildBar()
+    k = idxOf(was)
+    if m.ids[k] <> was then k = idxOf("guide")
+    setFocusIdx(k)
+end sub
+
 ' The bar at the top, as the web TV's: TunerBox, then the screens, in one rounded capsule; the highlighted
 ' item gets an accent pill. Everything else (favorite, last channel, record, mute, menu) is under More.
+' Watch On Demand (the show on now is in On Demand) goes before More, in the accent colour.
 sub buildBar()
     m.ids = ["guide", "ondemand", "sports", "search", "more"]
     m.labels = ["Guide", "On Demand", "Sports & Events", "Search", "More"]
+    if m.top.odButton then
+        m.ids.Push("more")
+        m.labels.Push("More")
+        m.ids[4] = "odprog"
+        m.labels[4] = "Watch On Demand"
+    end if
     if not m.top.showOnDemand then
         m.ids.Delete(1)
         m.labels.Delete(1)
@@ -115,7 +132,7 @@ sub paintBar(active as Boolean)
             m.btnText[k].color = thm("0x10244AFF")
         else
             m.btnRect[k].visible = false
-            m.btnText[k].color = thm("0xDCE8FFFF")
+            if m.ids[k] = "odprog" then m.btnText[k].color = thm("0xFFC845FF") else m.btnText[k].color = thm("0xDCE8FFFF")
         end if
     end for
 end sub
