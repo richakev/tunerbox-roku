@@ -127,6 +127,7 @@ sub init()
     m.optWaitTimer.duration = 1.2
     m.optWaitTimer.observeField("fire", "onOptWait")
     ' the bar's button asks a moment after tuning (as places), so channel surfing doesn't ask for every channel
+    tsInit()                ' pause / rewind live TV (MainTimeshift.brs)
     m.odHudTimer = CreateObject("roSGNode", "Timer")
     m.odHudTimer.repeat = false
     m.odHudTimer.duration = 2.5
@@ -265,6 +266,7 @@ sub quickPlay()
     c.title = regRead("lastName", "")
     c.live = true
     c.streamFormat = streamFmt(url)
+    tsStart(c.url)
     m.video.content = c
     m.video.control = "play"
     m.quick = true
@@ -344,10 +346,10 @@ sub onTaskResult()
     m.guide.favs = m.favs
     startFavsTask()
     fetchSettings()
-    ' the saved guide is read once the video is playing (startSavedGuide), so it doesn't slow the stream down
+    ' the saved guide, read at once on its own thread: with the ready-made copy (LoadTask saveGuideView) it's
+    ' quick, and waiting for the video to play first held the guide up by seconds
     m.savedGuideWait = true
-    m.savedGuideTimer.control = "start"
-    if m.video.state = "playing" then startSavedGuide()
+    startSavedGuide()
     if m.homeAuto and m.homeOn and homeAtStart() then
         m.homeAuto = false
         openHome()
@@ -371,11 +373,18 @@ sub startSavedGuide()
 end sub
 
 sub onSavedGuide()
-    r = m.sgTask.result
-    if r = invalid then return
-    ' memory: the finished task would keep its copy of the guide in its result; let the task go
+    t0 = CreateObject("roTimespan")
+    tk = m.sgTask
+    r = tk.result
+    if r = invalid or r.guideOnly = invalid then return
+    ' memory: the task's result would keep its copy of the guide; the {} isn't seen here. The task is kept
+    ' until it's done: it may still be writing the ready-made copy for next launch
+    tk.unobserveField("result")
+    tk.result = {}
+    m.sgKeep = tk
     m.sgTask = invalid
     bootGuide(r.guide)
+    print "[TunerBox] saved guide on screen in " + t0.TotalMilliseconds().ToStr() + " ms"
 end sub
 
 ' the saved guide, read after the channels and the video's start; then the guide refresh, unless it's fresh
@@ -747,6 +756,7 @@ sub playChannelFeed(idx as Integer, alt as Integer)
     c.live = true
     c.streamFormat = streamFmt(ch.url)
     m.extern = invalid
+    tsStart(c.url)
     m.video.control = "stop"
     m.video.content = c
     m.video.control = "play"
@@ -776,7 +786,7 @@ function chAlts(idx as Integer) as Integer
 end function
 
 function streamUrl(ch as Object) as String
-    u = withDevice(withBuffer(ccUrl(ch.url)))
+    u = withDevice(withBuffer(tsUrl(ccUrl(ch.url))))
     if isCompat() then
         sep = "?"
         if Instr(1, u, "?") > 0 then sep = "&"
@@ -804,6 +814,7 @@ end sub
 
 function streamFmt(url as String) as String
     if ccUrl(url) <> url then return "hls"     ' captions on: TunerBox's own stream comes over HLS
+    if tsUrl(url) <> url then return "hls"     ' pausable live TV (MainTimeshift.brs)
     f = regRead("fmt", "auto")
     if f = "hls" or f = "ts" then return f
     if Instr(1, LCase(url), ".m3u8") > 0 then return "hls"
@@ -886,6 +897,7 @@ sub onStandby()
             m.top.setFocus(true)
         end if
         m.hud.callFunc("hideAll")
+        tsDrop()
         m.video.control = "stop"
     else
         if not m.inStandby then return
@@ -918,6 +930,7 @@ sub onVideoState()
     end if
     if st = "playing" then
         m.retries = 0
+        tsPlaying()
         if m.savedGuideWait then startSavedGuide()
     else if st = "error" or st = "finished" then
         ' a live channel with backups: one more try on this feed, then the next feed in Setup's order
@@ -1051,7 +1064,7 @@ end sub
 ' /api/hls/{n} and /api/feed/hls (pasiegel 1.0 to v1.10.0 and main), taking the same alt, client, mode and
 ' buf as /api/stream/{n} and /api/feed/stream (name is ignored there). Other URLs are left as they are.
 ' cc=1 (richakev's fork): a master playlist naming the captions (CC1), which Roku needs to find them in a
-' live HLS stream. Older servers ignore it and send the plain playlist; ccPickTrack still asks for CC1 then.
+' live HLS stream. Older servers ignore it and send the plain playlist, where Roku finds no captions.
 function ccUrl(u as String) as String
     if m.video.globalCaptionMode = "Off" or m.base = "" or Left(u, Len(m.base)) <> m.base then return u
     h = u
@@ -1073,15 +1086,16 @@ sub ccApply()
     ccPickTrack()
 end sub
 
-' The Video node lists the captions it found in the stream (availableSubtitleTracks: "eia608/1" for CC1)
-' but doesn't always switch one on by itself, so with captions on, CC1 (else the first one) is picked here
+' The Video node lists the captions the playlist declares (availableSubtitleTracks: "eia608/CC1" from
+' TunerBox's cc=1 master playlist, "eia608/1" on some streams) but doesn't always switch one on by itself,
+' so with captions on, CC1 (else the first one) is picked here. Nothing is forced before it lists any.
 function ccTrack() as String
     tracks = m.video.availableSubtitleTracks
     if Type(tracks) <> "roArray" then return ""
     first = ""
     for each t in tracks
         nm = anyStr(t.TrackName)
-        if nm = "eia608/1" then return nm
+        if nm = "eia608/CC1" or nm = "eia608/1" then return nm
         if first = "" and Left(LCase(nm), 6) = "eia608" then first = nm
     end for
     return first
@@ -1090,8 +1104,6 @@ end function
 sub ccPickTrack()
     if m.video.globalCaptionMode <> "On" then return
     want = ccTrack()
-    ' none listed (a playlist that doesn't name them): ask for CC1 anyway, as broadcast TV carries it
-    if want = "" and m.mv = invalid then want = "eia608/1"
     if want <> "" and m.video.subtitleTrack <> want then
         print "[TunerBox] captions: picking " + want + " (was '" + m.video.subtitleTrack + "')"
         m.video.subtitleTrack = want
@@ -1207,6 +1219,7 @@ function onKeyEvent(key as String, press as Boolean) as Boolean
 
     if m.mode <> "live" then return false
     if m.mv <> invalid then return mvKey(key)
+    if tsKey(key) then return true      ' Play pauses, Rew / FF skip (when TunerBox can: MainTimeshift.brs)
 
     if key = "up" then
         changeChannel(1)
@@ -1318,6 +1331,8 @@ sub hudAction(id as String)
         goLast()
     else if id = "mute" then
         toggleMute()
+    else if id = "golive" then
+        tsGoLive()
     else if id = "cc" then
         toggleCaptions()
     else if id = "guide" then
@@ -1382,6 +1397,7 @@ function moreItems() as Object
         if m.odHud <> invalid then items.Push({ id: "odprog", label: "Watch On Demand" })
         if m.dvrOn then items.Push({ id: "record", label: "Record this show" })
     end if
+    if m.ts <> invalid and tsLag() > 0 then items.Push({ id: "golive", label: "Back to live", value: fmtDur(tsLag()) + " behind" })
     if m.hud.muted then items.Push({ id: "mute", label: "Unmute" }) else items.Push({ id: "mute", label: "Mute" })
     items.Push({ id: "cc", label: "Closed captions", value: ccLabel() })
     items.Append([
@@ -1404,6 +1420,9 @@ sub openGuide(startIdx as Integer, view as Object, title as String)
     info = { chIdx: startIdx, title: title }
     if view <> invalid then info.view = view
     m.guide.callFunc("openGuide", info)
+    ' opened before the saved guide was read (that waits for the video to start): read it now, the guide
+    ' fills in when it's in
+    if m.savedGuideWait then startSavedGuide()
 end sub
 
 sub closeGuide()
@@ -2005,7 +2024,7 @@ end sub
 sub playExternal(ex as Object)
     mvForget()
     m.extern = ex
-    u = withDevice(withBuffer(ccUrl(ex.url)))
+    u = withDevice(withBuffer(tsUrl(ccUrl(ex.url))))
     if isCompat() then
         sep = "?"
         if Instr(1, u, "?") > 0 then sep = "&"
@@ -2016,7 +2035,8 @@ sub playExternal(ex as Object)
     c.title = ex.title
     c.live = true
     c.streamFormat = "ts"
-    if ccUrl(ex.url) <> ex.url then c.streamFormat = "hls"
+    if ccUrl(ex.url) <> ex.url or tsUrl(ex.url) <> ex.url then c.streamFormat = "hls"
+    tsStart(c.url)
     m.video.control = "stop"
     m.video.content = c
     m.video.control = "play"
@@ -2643,6 +2663,8 @@ end function
 function settingsItems() as Object
     items = []
     if m.homeOn then items.Push({ id: "homestart", label: "Start on Home (this Roku)", value: onOff(homeAtStart()) })
+    ' only when the server can (MainTimeshift.brs)
+    if m.tsMin > 0 then items.Push({ id: "timeshift", label: "Pause live TV (Play key)", value: onOff(regRead("timeshift", "1") = "1") })
     items.Append([
         { id: "cc", label: "Closed captions (all apps)", value: ccLabel() },
         { id: "compat", label: "720p mode (all channels)", value: compatLabel() },
@@ -3183,7 +3205,7 @@ sub onMenuSelected()
             showBuffers()
         else if id = "theme" then
             showThemes()
-        else if id = "fmt" or id = "compat" or id = "homestart" or id = "cc" then
+        else if id = "fmt" or id = "compat" or id = "homestart" or id = "cc" or id = "timeshift" then
             ' toggles keep Settings open and refresh the value in place
             runMenuAction(id)
             m.menu.items = settingsItems()
@@ -3242,6 +3264,8 @@ sub runMenuAction(action as String)
         if m.playIdx >= 0 then playChannel(m.playIdx)
     else if action = "compat" then
         toggleCompat()
+    else if action = "timeshift" then
+        tsToggleSetting()
     else if action = "cc" then
         toggleCaptions()
     else if action = "fit" then
@@ -4126,6 +4150,7 @@ sub vodStart(at as Float)
     v = m.vod
     if v = invalid then return
     mvForget()
+    tsDrop()
     m.seekTimer.control = "stop"
     m.parkTimer.control = "stop"
     m.retryTimer.control = "stop"
@@ -4462,6 +4487,7 @@ end sub
 sub fetchSettings()
     homeApi("settings", "/api/settings", "", invalid, {})
     homeApi("catchup", "/api/catchup", "", invalid, {})
+    tsProbe()
 end sub
 
 ' small call to TunerBox for Home (results come back in onHomeApi)
@@ -4495,6 +4521,8 @@ sub onHomeApi(event as Object)
             m.cuDays = r.data
             m.guide.cuDays = r.data
         end if
+    else if r.tag = "timeshift" then
+        tsGot(r)
     else if r.tag = "cuguide" then
         gotPastGuide(r)
     else if r.tag = "gdesc" then
@@ -4862,6 +4890,7 @@ end sub
 ' Where you got to is saved on TunerBox, so any screen can resume it.
 sub playRecording(it as Object, from as Float)
     mvForget()
+    tsDrop()
     if m.menu.visible then m.menu.callFunc("closeMenu")
     coverHome()
     m.hud.callFunc("hideAll")

@@ -13,9 +13,13 @@ sub loadData()
         loadGuide()
     else if mode = "savedguide" then
         t0 = CreateObject("roTimespan")
+        m.fromRows = false
         g = readGuideCache()
         print "[TunerBox] saved guide read in " + t0.TotalMilliseconds().ToStr() + " ms"
         m.top.result = { ok: true, guideOnly: true, guide: g }
+        ' read the slow way (no ready-made copy: a guide saved before there was one, and still fresh, so
+        ' nothing new gets downloaded): make the copy now, once the guide is handed over, for next launch
+        if m.fromRows and g <> invalid then saveGuideView(g)
     else if mode = "favs" then
         loadFavs()
     else if mode = "setfav" then
@@ -58,6 +62,12 @@ function readCache(kind as String) as String
 end function
 
 sub writeCache(kind as String, txt as String)
+    ' new listings: the ready-made copy of the old ones (saveGuideView) no longer goes with them
+    if kind = "guide" then
+        fs = CreateObject("roFileSystem")
+        gv = cachePath("guidev")
+        if fs.Exists(gv) then fs.Delete(gv)
+    end if
     ok = WriteAsciiFile(cachePath(kind), txt)
     print "[TunerBox] cache write " + kind + ": " + ok.ToStr() + " (" + Len(txt).ToStr() + " chars)"
 end sub
@@ -148,7 +158,52 @@ function teamsOf(byNum as Object) as Object
     return out
 end function
 
+' The saved guide in the shape the scene uses ({ "<number>": [{ start, stop, title, ... }] }), written beside
+' the rows in "guide" (which Sports & Events matching reads as they are). ParseJson builds it with no
+' BrightScript loop over every show, the slow part of reading the rows, so a relaunch shows the guide much
+' sooner. writeCache("guide") deletes it, and it's written again once the guide it goes with is handed over;
+' until then (or with a save from an older version of this app) the rows are read instead.
+sub saveGuideView(g as Dynamic)
+    if Type(g) <> "roAssociativeArray" or g.Count() = 0 then return
+    t0 = CreateObject("roTimespan")
+    txt = FormatJson({ v: 1, guide: g })
+    if txt <> "" then writeCache("guidev", txt)
+    print "[TunerBox] ready-made guide saved in " + t0.TotalMilliseconds().ToStr() + " ms"
+end sub
+
+' saveGuideView's copy without the shows that ended before tFrom; invalid when there's none (or nothing left)
+function readGuideView(tFrom as Integer) as Dynamic
+    txt = readCache("guidev")
+    if txt = "" then return invalid
+    data = ParseJson(txt)
+    txt = ""
+    if Type(data) <> "roAssociativeArray" or data.v <> 1 or Type(data.guide) <> "roAssociativeArray" then return invalid
+    g = data.guide
+    data = invalid
+    for each key in g.Keys()
+        list = g[key]
+        if Type(list) <> "roArray" then
+            g.Delete(key)
+        else
+            ' shows are in time order: only the ones at the start can have ended
+            while list.Count() > 0 and numv(list[0].stop) <= tFrom
+                list.Shift()
+            end while
+            if list.Count() = 0 then g.Delete(key)
+        end if
+    end for
+    if g.Count() = 0 then return invalid
+    return g
+end function
+
 function readGuideCache() as Object
+    t = nowEpoch()
+    g = readGuideView(t - 3 * 3600)
+    if g <> invalid then
+        print "[TunerBox] saved guide: the ready-made copy"
+        return g
+    end if
+    m.fromRows = true
     txt = readCache("guide")
     if txt = "" then return invalid
     data = ParseJson(txt)
@@ -1163,13 +1218,15 @@ sub loadGuide()
     ' api/guide and epg.xml: the text to save, made from the guide (guide.json keeps the text it downloaded).
     ' Only when there's no second pass: making it would hold that one up
     if full and src <> "guide.json" and guide <> invalid and guide.Count() > 0 then m.guideTxt = FormatJson({ programs: progsToRows(guide), matchups: teamsOf(guide) })
-    ' the first pass is with the scene now: let this thread's copy go before the second download
-    guide = invalid
-    result = invalid
     if full then
         if m.guideTxt <> "" then writeCache("guide", m.guideTxt)
         m.guideTxt = ""
+        ' (guide.json's rows were saved as they were read) and the ready-made copy for next launch
+        if result.ok then saveGuideView(guide)
     end if
+    ' the first pass is with the scene now: let this thread's copy go before the second download
+    guide = invalid
+    result = invalid
 
     ' ---- the second pass: the hours after those, while the guide is already usable
     if not full then
@@ -1189,6 +1246,7 @@ sub loadGuide()
             m.top.result = res2
             res2 = invalid
             if src = "api/guide" then writeCache("guide", FormatJson({ programs: progsToRows(g2), matchups: teamsOf(g2) }))
+            saveGuideView(g2)
             ' the whole guide is saved: the first pass's copy isn't needed
             m.guideTxt = ""
         end if

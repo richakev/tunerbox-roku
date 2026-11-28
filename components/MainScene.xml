@@ -3,6 +3,7 @@
   <script type="text/brightscript" uri="pkg:/components/MainScene.brs" />
   <script type="text/brightscript" uri="pkg:/source/utils.brs" />
   <script type="text/brightscript" uri="pkg:/components/MainMultiview.brs" />
+  <script type="text/brightscript" uri="pkg:/components/MainTimeshift.brs" />
   <interface>
     <field id="launchHost" type="string" alwaysNotify="true" onChange="onLaunchHost" />
     <field id="exitApp" type="boolean" alwaysNotify="true" />
