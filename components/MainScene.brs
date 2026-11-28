@@ -151,6 +151,7 @@ sub init()
 
     m.video.observeField("state", "onVideoState")
     m.video.observeField("streamInfo", "onStreamInfo")
+    m.video.observeField("availableSubtitleTracks", "onCcTracks")
     m.guide.observeField("tuneRequest", "onGuideTune")
     m.guide.observeField("previewRequest", "onGuidePreview")
     m.guide.observeField("optionsRequest", "onGuideOptions")
@@ -775,7 +776,7 @@ function chAlts(idx as Integer) as Integer
 end function
 
 function streamUrl(ch as Object) as String
-    u = withDevice(withBuffer(ch.url))
+    u = withDevice(withBuffer(ccUrl(ch.url)))
     if isCompat() then
         sep = "?"
         if Instr(1, u, "?") > 0 then sep = "&"
@@ -802,6 +803,7 @@ sub toggleCompat()
 end sub
 
 function streamFmt(url as String) as String
+    if ccUrl(url) <> url then return "hls"     ' captions on: TunerBox's own stream comes over HLS
     f = regRead("fmt", "auto")
     if f = "hls" or f = "ts" then return f
     if Instr(1, LCase(url), ".m3u8") > 0 then return "hls"
@@ -901,6 +903,7 @@ end sub
 
 sub onVideoState()
     st = m.video.state
+    ccApply()                   ' a new stream: multiview or On Demand may have started or ended
     if m.rec <> invalid then
         recState(st)
         return
@@ -949,7 +952,7 @@ end sub
 sub showStreamStats()
     v = m.video
     if m.extern <> invalid then
-        showDialog("info", "Stream stats", [m.extern.num + " " + m.extern.name, "State: " + v.state, "Video: " + v.videoFormat + "    Audio: " + v.audioFormat, m.extern.url], ["OK"], ["close"])
+        showDialog("info", "Stream stats", [m.extern.num + " " + m.extern.name, "State: " + v.state, "Video: " + v.videoFormat + "    Audio: " + v.audioFormat, ccStatsLine(), m.extern.url], ["OK"], ["close"])
         return
     end if
     if m.playIdx < 0 then return
@@ -963,6 +966,7 @@ sub showStreamStats()
     end if
     lines.Push("Buffer underruns this channel: " + m.underruns.ToStr())
     lines.Push("Time to start: " + Str(v.timeToStartStreaming) + " s")
+    lines.Push(ccStatsLine())
     if m.alt > 0 then lines.Push("Feed: backup " + m.alt.ToStr() + " of " + chAlts(m.playIdx).ToStr())
     lines.Push(streamUrl({ url: withAlt(ch.url, m.alt), numStr: ch.numStr }))
     showDialog("info", "Stream stats", lines, ["OK"], ["close"])
@@ -1011,6 +1015,115 @@ sub toggleMute()
         showToast("Sound on")
     end if
 end sub
+
+' ============================================================ closed captions
+' Broadcast TV carries its captions (CEA-608) inside the picture, and TunerBox passes them on (every version:
+' -c:v copy keeps them, and libx264 writes them back when it converts). The Video node decodes and draws
+' them itself, so this is only the switch. It's Roku's own caption setting (Settings > Accessibility >
+' Captions mode), kept for the whole device, so other apps follow it too and it's still set next launch.
+' They're held back over multiview's tiles and under On Demand's library subtitles (those win, as on the web).
+function ccLabel() as String
+    md = m.video.globalCaptionMode
+    if md = "On" or md = "Off" then return UCase(md)
+    return md                   ' "When mute" or "Instant replay", as set in Roku's settings
+end function
+
+sub toggleCaptions()
+    if m.video.globalCaptionMode = "On" then
+        m.video.globalCaptionMode = "Off"
+        showToast("Closed captions: Off")
+    else
+        m.video.globalCaptionMode = "On"
+        if m.mv <> invalid then
+            showToast("Closed captions: On (not shown in multiview)")
+        else if m.vod <> invalid and m.vod.sub <> invalid then
+            showToast("Closed captions: On (shown when subtitles are off)")
+        else
+            showToast("Closed captions: On (they start in a few seconds)")
+        end if
+    end if
+    ccApply()
+    if m.mv = invalid then retuneLive()     ' live TV changes between TS and HLS (ccUrl)
+end sub
+
+' The Video node only reads CEA-608 from HLS (Roku's closed caption docs list HLS, not a plain TS stream),
+' so while captions are on, TunerBox's own live streams are asked for over HLS. Every TunerBox has
+' /api/hls/{n} and /api/feed/hls (pasiegel 1.0 to v1.10.0 and main), taking the same alt, client, mode and
+' buf as /api/stream/{n} and /api/feed/stream (name is ignored there). Other URLs are left as they are.
+' cc=1 (richakev's fork): a master playlist naming the captions (CC1), which Roku needs to find them in a
+' live HLS stream. Older servers ignore it and send the plain playlist; ccPickTrack still asks for CC1 then.
+function ccUrl(u as String) as String
+    if m.video.globalCaptionMode = "Off" or m.base = "" or Left(u, Len(m.base)) <> m.base then return u
+    h = u
+    if Instr(1, u, "/api/stream/") > 0 then
+        h = u.Replace("/api/stream/", "/api/hls/")
+    else if Instr(1, u, "/api/feed/stream?") > 0 then
+        h = u.Replace("/api/feed/stream?", "/api/feed/hls?")
+    else
+        return u
+    end if
+    sep = "?"
+    if Instr(1, h, "?") > 0 then sep = "&"
+    return h + sep + "cc=1"
+end function
+
+sub ccApply()
+    hold = (m.mv <> invalid) or (m.vod <> invalid and m.vod.sub <> invalid)
+    if m.video.suppressCaptions <> hold then m.video.suppressCaptions = hold
+    ccPickTrack()
+end sub
+
+' The Video node lists the captions it found in the stream (availableSubtitleTracks: "eia608/1" for CC1)
+' but doesn't always switch one on by itself, so with captions on, CC1 (else the first one) is picked here
+function ccTrack() as String
+    tracks = m.video.availableSubtitleTracks
+    if Type(tracks) <> "roArray" then return ""
+    first = ""
+    for each t in tracks
+        nm = anyStr(t.TrackName)
+        if nm = "eia608/1" then return nm
+        if first = "" and Left(LCase(nm), 6) = "eia608" then first = nm
+    end for
+    return first
+end function
+
+sub ccPickTrack()
+    if m.video.globalCaptionMode <> "On" then return
+    want = ccTrack()
+    ' none listed (a playlist that doesn't name them): ask for CC1 anyway, as broadcast TV carries it
+    if want = "" and m.mv = invalid then want = "eia608/1"
+    if want <> "" and m.video.subtitleTrack <> want then
+        print "[TunerBox] captions: picking " + want + " (was '" + m.video.subtitleTrack + "')"
+        m.video.subtitleTrack = want
+    end if
+end sub
+
+sub onCcTracks()
+    tracks = m.video.availableSubtitleTracks
+    n = 0
+    if Type(tracks) = "roArray" then n = tracks.Count()
+    print "[TunerBox] captions: " + n.ToStr() + " track(s) " + FormatJson(tracks)
+    ccPickTrack()
+end sub
+
+' Stream stats: what the Video node knows about captions, to tell "none in the stream" from "not switched on"
+function ccStatsLine() as String
+    v = m.video
+    tracks = v.availableSubtitleTracks
+    names = []
+    if Type(tracks) = "roArray" then
+        for each t in tracks
+            names.Push(anyStr(t.TrackName))
+        end for
+    end if
+    found = "none found"
+    if names.Count() > 0 then found = names.Join(", ")
+    sel = v.subtitleTrack
+    if sel = "" then sel = "-"
+    s = "Captions: " + v.globalCaptionMode + "    track: " + sel + "    in stream: " + found
+    if v.suppressCaptions then s = s + "    (held back)"
+    return s
+end function
 
 ' ============================================================ banner / toast
 function bannerInfo(ch as Object) as Object
@@ -1141,6 +1254,8 @@ function liveLit(ch as String) as Boolean
         goLast()
     else if lc = "m" then
         toggleMute()
+    else if lc = "c" then
+        toggleCaptions()
     else if lc = "/" then
         promptSearch()
     else if lc = "t" then
@@ -1203,6 +1318,8 @@ sub hudAction(id as String)
         goLast()
     else if id = "mute" then
         toggleMute()
+    else if id = "cc" then
+        toggleCaptions()
     else if id = "guide" then
         openGuide(m.curIdx, invalid, "")
     else if id = "search" then
@@ -1266,6 +1383,7 @@ function moreItems() as Object
         if m.dvrOn then items.Push({ id: "record", label: "Record this show" })
     end if
     if m.hud.muted then items.Push({ id: "mute", label: "Unmute" }) else items.Push({ id: "mute", label: "Mute" })
+    items.Push({ id: "cc", label: "Closed captions", value: ccLabel() })
     items.Append([
         { id: "favs", label: "Favorites" },
         { id: "stats", label: "Game stats & live scores" },
@@ -1887,7 +2005,7 @@ end sub
 sub playExternal(ex as Object)
     mvForget()
     m.extern = ex
-    u = withDevice(withBuffer(ex.url))
+    u = withDevice(withBuffer(ccUrl(ex.url)))
     if isCompat() then
         sep = "?"
         if Instr(1, u, "?") > 0 then sep = "&"
@@ -1898,6 +2016,7 @@ sub playExternal(ex as Object)
     c.title = ex.title
     c.live = true
     c.streamFormat = "ts"
+    if ccUrl(ex.url) <> ex.url then c.streamFormat = "hls"
     m.video.control = "stop"
     m.video.content = c
     m.video.control = "play"
@@ -2303,6 +2422,8 @@ sub onDlgButton()
             avAudioMenu()
         else if action = "subs" then
             avSubsMenu()
+        else if action = "cc" then
+            toggleCaptions()
         end if
     else if kind = "vodaudio" then
         if Left(action, 1) = "a" then avPickAudio(Int(Val(Mid(action, 2))))
@@ -2523,6 +2644,7 @@ function settingsItems() as Object
     items = []
     if m.homeOn then items.Push({ id: "homestart", label: "Start on Home (this Roku)", value: onOff(homeAtStart()) })
     items.Append([
+        { id: "cc", label: "Closed captions (all apps)", value: ccLabel() },
         { id: "compat", label: "720p mode (all channels)", value: compatLabel() },
         { id: "fmt", label: "Stream format", value: UCase(regRead("fmt", "auto")) },
         { id: "buffer", label: "Stream cache", value: bufferMenuLabel() },
@@ -2899,7 +3021,7 @@ end sub
 ' and changing channel lets go of the one it was on (so a 1-connection account can change channels)
 function withDevice(u as String) as String
     if Left(u, Len(m.base)) <> m.base then return u
-    if Instr(1, u, "/api/stream/") = 0 and Instr(1, u, "/api/feed/") = 0 then return u
+    if Instr(1, u, "/api/stream/") = 0 and Instr(1, u, "/api/hls/") = 0 and Instr(1, u, "/api/feed/") = 0 then return u
     if Instr(1, u, "client=") > 0 then return u
     sep = "?"
     if Instr(1, u, "?") > 0 then sep = "&"
@@ -3061,7 +3183,7 @@ sub onMenuSelected()
             showBuffers()
         else if id = "theme" then
             showThemes()
-        else if id = "fmt" or id = "compat" or id = "homestart" then
+        else if id = "fmt" or id = "compat" or id = "homestart" or id = "cc" then
             ' toggles keep Settings open and refresh the value in place
             runMenuAction(id)
             m.menu.items = settingsItems()
@@ -3120,6 +3242,8 @@ sub runMenuAction(action as String)
         if m.playIdx >= 0 then playChannel(m.playIdx)
     else if action = "compat" then
         toggleCompat()
+    else if action = "cc" then
+        toggleCaptions()
     else if action = "fit" then
         openFitCal()
     else if action = "hideun" then
@@ -3441,6 +3565,8 @@ sub avMenu()
         buttons.Push("Subtitles: " + plainText(sl))
         actions.Push("subs")
     end if
+    buttons.Push("Closed captions: " + ccLabel())
+    actions.Push("cc")
     buttons.Push("Close")
     actions.Push("close")
     showDialog("vodav", anyStr(v.it.title), ["This title"], buttons, actions)
@@ -3512,6 +3638,7 @@ sub avSubsOff()
     v.cues = invalid
     m.subsTimer.control = "stop"
     subsShow("")
+    ccApply()
     avSave(v)
 end sub
 
@@ -3520,6 +3647,7 @@ sub subsOn(s as Object, quiet as Boolean)
     v.sub = s
     v.cues = invalid
     subsShow("")
+    ccApply()
     if not quiet then showToast("Loading subtitles... (the first time takes a minute for a long film)")
     vodApi("vodsubs", "/api/vod/subs/" + urlEncode(v.id) + "/" + urlEncode(anyStr(s.id)), invalid, { seq: m.vodSeq, sid: anyStr(s.id), quiet: quiet })
 end sub
@@ -3531,6 +3659,7 @@ sub gotSubs(r as Object)
     d = r.data
     if not r.ok or Type(d) <> "roAssociativeArray" or Type(d.cues) <> "roArray" then
         v.sub = invalid
+        ccApply()
         if not r.ctx.quiet then
             why = ""
             if Type(d) = "roAssociativeArray" and d.detail <> invalid then why = ": " + anyStr(d.detail)
@@ -4299,6 +4428,8 @@ function vodKey(key as String) as Boolean
         lc = LCase(Mid(key, 5))
         if lc = "m" then
             toggleMute()
+        else if lc = "c" then
+            toggleCaptions()
         else if lc = "i" then
             showVodHud()
         else if lc = "s" then
